@@ -57,12 +57,12 @@ class DatabaseWrapper:
             kwargs['dsn'] = f"DRIVER={{{driver_name}}};DATABASE=%s;UNICODESQL=1;XDYNAMIC=1;" \
                             f"PKG=A/DJANGO,2,0,0,1,512;" \
                             "SYSTEM=%s;PORT=%s;PROTOCOL=TCPIP;UID=%s;PWD=%s" % (
-                kwargs.get('database'),
-                kwargs.get('host'),
-                kwargs.get('port'),
-                kwargs.get('user'),
-                kwargs.get('password')
-            )
+                                kwargs.get('database'),
+                                kwargs.get('host'),
+                                kwargs.get('port'),
+                                kwargs.get('user'),
+                                kwargs.get('password')
+                            )
         else:
             kwargs['dsn'] = kwargs.get('database')
 
@@ -103,6 +103,29 @@ class DatabaseWrapper:
             cursor = DB2CursorWrapper(connection)
             cursor.set_current_schema(currentschema)
 
+
+        #---------------------------------------------
+        # add default message reply ADDRPYLE  # sumit
+
+        message_replies = kwargs.pop('message_replies', [])
+        cursor = connection.cursor()
+        for message_reply in message_replies:
+            seq,message_id,reply = message_reply
+            try:
+                cursor.execute("{call QSYS2.QCMDEXC('ADDRPYLE SEQNBR({}) MSGID({}}) RPY({})')}".format(seq,message_id,reply))
+            except Exception as e:
+                for a in e.args:
+                    print(a)
+                    print("--"*33)
+
+        try:
+            cursor.execute("{call QSYS2.QCMDEXC('CHGJOB  INQMSGRPY(*SYSRPYL)')}")
+        except Exception as e:
+            for a in e.args:
+                print(a)
+                print("++"*33)
+
+        #---------------------------------------------
         return connection
 
     def is_active(self, connection=None):
