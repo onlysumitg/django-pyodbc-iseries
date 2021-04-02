@@ -154,10 +154,9 @@ class DatabaseWrapper:
             print("processing message_replies")
             seq, message_id, reply = message_reply
             try:
-                print("running...",
-                      "{call QSYS2.QCMDEXC('ADDRPYLE SEQNBR({}) MSGID({}) RPY({})')}".format(seq, message_id, reply))
-                cursor.execute(
-                    "{call QSYS2.QCMDEXC('ADDRPYLE SEQNBR({}) MSGID({}) RPY({})')}".format(seq, message_id, reply))
+                call_string= "call QSYS2.QCMDEXC('ADDRPYLE SEQNBR({}) MSGID({}) RPY({})')".format(seq, message_id, reply)
+                print("running...","{"+call_string+"}")
+                cursor.execute("{"+call_string+"}")
             except Exception as e:
                 for a in e.args:
                     print("point1" , a)
