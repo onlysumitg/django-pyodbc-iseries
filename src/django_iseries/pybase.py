@@ -86,6 +86,28 @@ class DatabaseWrapper:
             kwargs['dsn'] += "SSLSERVERCERTIFICATE=%s;" % (kwargs.get('sslservercertificate'))
             del kwargs['sslservercertificate']
 
+
+
+
+
+
+        conn_options = {'autocommit': False}
+        kwargs['conn_options'] = conn_options
+        if 'options' in kwargs:
+            kwargs.update(kwargs.get('options'))  # merging kwargs[options:{}] in the kwargs
+            del kwargs['options']
+        if 'port' in kwargs:
+            del kwargs['port']
+
+
+
+
+
+        currentschema = kwargs.pop('currentschema', None)
+
+
+
+        #database_connect_options = kwargs.pop('options', None)
         # --------------------------------------------
         # Connection String: NAM SUMIT
         # ODBC.INI: Naming
@@ -94,7 +116,7 @@ class DatabaseWrapper:
         #               1 = *SYS
         # Default: 0
         # --------------------------------------------
-        print(">>>>>>>>>>>>>>>>>>>> Checking naming >>>>>>>>>>>>")
+
         if 'nam' in kwargs:
             kwargs['dsn'] += f"NAM={kwargs.get('nam')};"
             print("using naming..", f"NAM={kwargs.get('nam')}")
@@ -115,17 +137,10 @@ class DatabaseWrapper:
             del kwargs['dbq']
 
 
-
-        conn_options = {'autocommit': False}
-        kwargs['conn_options'] = conn_options
-        if 'options' in kwargs:
-            kwargs.update(kwargs.get('options'))
-            del kwargs['options']
-        if 'port' in kwargs:
-            del kwargs['port']
-
-        currentschema = kwargs.pop('currentschema', None)
-
+        '''
+                NO Change in connection string after this point 
+        
+        '''
         dsn = kwargs.pop('dsn', '')
 
         connection = Database.connect(dsn, **kwargs)
@@ -139,8 +154,10 @@ class DatabaseWrapper:
         # add default message reply ADDRPYLE  # sumit
 
         message_replies = kwargs.pop('message_replies', [])
+        print("message_replies",message_replies)
         cursor = connection.cursor()
         for message_reply in message_replies:
+            print("processing message_replies")
             seq,message_id,reply = message_reply
             try:
                 cursor.execute("{call QSYS2.QCMDEXC('ADDRPYLE SEQNBR({}) MSGID({}}) RPY({})')}".format(seq,message_id,reply))
