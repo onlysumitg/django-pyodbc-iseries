@@ -130,13 +130,20 @@ class DatabaseWrapper:
         #               1 = *SYS
         # Default: 0
         # --------------------------------------------
+        '''
+        	Specifies the IBM i libraries to add to the server job's library list. The libraries are delimited by commas or spaces, and *USRLIBL may be used as a place holder for the server job's current library list. The library list is used for resolving unqualified stored procedure calls and finding libraries in catalog API calls. If *USRLIBL is not specified, the specified libraries will replace the server job's current library list.
+            Note: The first library listed in this property will also be the default schema (or library ), which is used to resolve unqualified names in SQL statements. To specify no default schema, a comma should be entered before any libraries.
+        
+        '''
+
         if 'dbq' in kwargs:
             liblist = kwargs.pop('dbq', [])
             libstring =""
             if liblist:
                 libstring = ",".join(liblist)
 
-            kwargs['dsn'] += f"DBQ={libstring};"
+            # extra coma not to set current schema
+            kwargs['dsn'] += f"DBQ=,{libstring};"
             print("Current Connection String...",kwargs['dsn'])
 
 
