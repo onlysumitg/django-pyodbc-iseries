@@ -86,6 +86,31 @@ class DatabaseWrapper:
             kwargs['dsn'] += "SSLSERVERCERTIFICATE=%s;" % (kwargs.get('sslservercertificate'))
             del kwargs['sslservercertificate']
 
+        # --------------------------------------------
+        # Connection String: NAM SUMIT
+        # ODBC.INI: Naming
+        #         Possible values:
+        #               0 = *SQL
+        #               1 = *SYS
+        # Default: 0
+        # --------------------------------------------
+        if 'nam' in kwargs:
+            kwargs['dsn'] += f"NAM={kwargs.get('NAM')};"
+            del kwargs['nam']
+        # --------------------------------------------
+        # Connection String: NAM SUMIT
+        # ODBC.INI: Naming
+        #         Possible values:
+        #               0 = *SQL
+        #               1 = *SYS
+        # Default: 0
+        # --------------------------------------------
+        if 'dbq' in kwargs:
+            kwargs['dsn'] += f"DBQ={kwargs.get('DBQ')};"
+            del kwargs['dbq']
+
+
+
         conn_options = {'autocommit': False}
         kwargs['conn_options'] = conn_options
         if 'options' in kwargs:
@@ -102,6 +127,7 @@ class DatabaseWrapper:
         if currentschema:
             cursor = DB2CursorWrapper(connection)
             cursor.set_current_schema(currentschema)
+
 
 
         #---------------------------------------------
