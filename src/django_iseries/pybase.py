@@ -131,10 +131,14 @@ class DatabaseWrapper:
         # Default: 0
         # --------------------------------------------
         if 'dbq' in kwargs:
-            kwargs['dsn'] += f"DBQ={kwargs.get('dbq')};"
-            print("using dbq..", f"DBQ={kwargs.get('NAM')}")
+            liblist = kwargs.pop('dbq', [])
+            libstring =""
+            if liblist:
+                libstring = ",".join(liblist)
+
+            kwargs['dsn'] += f"DBQ={libstring};"
             print("Current Connection String...",kwargs['dsn'])
-            del kwargs['dbq']
+
 
 
         '''
