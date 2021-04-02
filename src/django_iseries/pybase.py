@@ -94,6 +94,7 @@ class DatabaseWrapper:
         #               1 = *SYS
         # Default: 0
         # --------------------------------------------
+        print(">>>>>>>>>>>>>>>>>>>> Checking naming >>>>>>>>>>>>")
         if 'nam' in kwargs:
             kwargs['dsn'] += f"NAM={kwargs.get('nam')};"
             print("using naming..", f"NAM={kwargs.get('nam')}")
