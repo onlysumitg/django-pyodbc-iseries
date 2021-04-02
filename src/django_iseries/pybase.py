@@ -95,7 +95,9 @@ class DatabaseWrapper:
         # Default: 0
         # --------------------------------------------
         if 'nam' in kwargs:
-            kwargs['dsn'] += f"NAM={kwargs.get('NAM')};"
+            kwargs['dsn'] += f"NAM={kwargs.get('nam')};"
+            print("using naming..", f"NAM={kwargs.get('nam')}")
+            print("Current Connection String...",kwargs['dsn'])
             del kwargs['nam']
         # --------------------------------------------
         # Connection String: NAM SUMIT
@@ -106,7 +108,9 @@ class DatabaseWrapper:
         # Default: 0
         # --------------------------------------------
         if 'dbq' in kwargs:
-            kwargs['dsn'] += f"DBQ={kwargs.get('DBQ')};"
+            kwargs['dsn'] += f"DBQ={kwargs.get('dbq')};"
+            print("using dbq..", f"DBQ={kwargs.get('NAM')}")
+            print("Current Connection String...",kwargs['dsn'])
             del kwargs['dbq']
 
 
