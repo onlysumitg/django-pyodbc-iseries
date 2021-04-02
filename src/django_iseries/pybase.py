@@ -56,7 +56,7 @@ class DatabaseWrapper:
         if 'port' in kwargs and 'host' in kwargs:
             kwargs['dsn'] = f"DRIVER={{{driver_name}}};DATABASE=%s;UNICODESQL=1;XDYNAMIC=1;" \
                             f"PKG=A/DJANGO,2,0,0,1,512;" \
-                            "SYSTEM=%s;PORT=%s;PROTOCOL=TCPIP;UID=%s;PWD=%s" % (
+                            "SYSTEM=%s;PORT=%s;PROTOCOL=TCPIP;UID=%s;PWD=%s;" % (
                                 kwargs.get('database'),
                                 kwargs.get('host'),
                                 kwargs.get('port'),
