@@ -17,7 +17,6 @@
 # +--------------------------------------------------------------------------+
 
 
-
 import datetime
 import platform
 import re
@@ -42,7 +41,6 @@ OperationalError = Database.OperationalError
 InternalError = Database.InternalError
 ProgrammingError = Database.ProgrammingError
 NotSupportedError = Database.NotSupportedError
-
 
 FORMAT_QMARK_REGEX = re.compile(r'(?<!%)%s')
 SQLCODE_0530_REGEX = re.compile(r"^(\[.+] *){4}SQL0530.*")
@@ -86,11 +84,6 @@ class DatabaseWrapper:
             kwargs['dsn'] += "SSLSERVERCERTIFICATE=%s;" % (kwargs.get('sslservercertificate'))
             del kwargs['sslservercertificate']
 
-
-
-
-
-
         conn_options = {'autocommit': False}
         kwargs['conn_options'] = conn_options
         if 'options' in kwargs:
@@ -99,15 +92,9 @@ class DatabaseWrapper:
         if 'port' in kwargs:
             del kwargs['port']
 
-
-
-
-
         currentschema = kwargs.pop('currentschema', None)
 
-
-
-        #database_connect_options = kwargs.pop('options', None)
+        # database_connect_options = kwargs.pop('options', None)
         # --------------------------------------------
         # Connection String: NAM SUMIT
         # ODBC.INI: Naming
@@ -120,7 +107,7 @@ class DatabaseWrapper:
         if 'nam' in kwargs:
             kwargs['dsn'] += f"NAM={kwargs.get('nam')};"
             print("using naming..", f"NAM={kwargs.get('nam')}")
-            print("Current Connection String...",kwargs['dsn'])
+            print("Current Connection String...", kwargs['dsn'])
             del kwargs['nam']
         # --------------------------------------------
         # Connection String: NAM SUMIT
@@ -138,15 +125,13 @@ class DatabaseWrapper:
 
         if 'dbq' in kwargs:
             liblist = kwargs.pop('dbq', [])
-            libstring =""
+            libstring = ""
             if liblist:
                 libstring = ",".join(liblist)
 
             # extra coma not to set current schema
             kwargs['dsn'] += f"DBQ=,{libstring};"
-            print("Current Connection String...",kwargs['dsn'])
-
-
+            print("Current Connection String...", kwargs['dsn'])
 
         '''
                 NO Change in connection string after this point 
@@ -159,36 +144,36 @@ class DatabaseWrapper:
             cursor = DB2CursorWrapper(connection)
             cursor.set_current_schema(currentschema)
 
-
-
-        #---------------------------------------------
+        # ---------------------------------------------
         # add default message reply ADDRPYLE  # sumit
 
         message_replies = kwargs.pop('message_replies', [])
-        print("message_replies",message_replies)
+        print("message_replies", message_replies)
         cursor = connection.cursor()
         for message_reply in message_replies:
             print("processing message_replies")
-            seq,message_id,reply = message_reply
+            seq, message_id, reply = message_reply
             try:
-                print("running...", "{call QSYS2.QCMDEXC('ADDRPYLE SEQNBR({}) MSGID({}) RPY({})')}".format(seq,message_id,reply))
-                cursor.execute("{call QSYS2.QCMDEXC('ADDRPYLE SEQNBR({}) MSGID({}) RPY({})')}".format(seq,message_id,reply))
+                print("running...",
+                      "{call QSYS2.QCMDEXC('ADDRPYLE SEQNBR({}) MSGID({}) RPY({})')}".format(seq, message_id, reply))
+                cursor.execute(
+                    "{call QSYS2.QCMDEXC('ADDRPYLE SEQNBR({}) MSGID({}) RPY({})')}".format(seq, message_id, reply))
             except Exception as e:
                 for a in e.args:
-                    print(a)
-                    print("--"*33)
+                    print("point1" , a)
+                    print("--" * 33)
 
         try:
             cursor.execute("{call QSYS2.QCMDEXC('CHGJOB  INQMSGRPY(*SYSRPYL)')}")
         except Exception as e:
             for a in e.args:
-                print(a)
-                print("++"*33)
+                print("point2", a)
+                print("++" * 33)
 
-        #---------------------------------------------
+        # ---------------------------------------------
         return connection
 
-    def is_active(self, connection=None):
+    def is_active(self, connection = None):
         return bool(connection.cursor())
 
     # Over-riding _cursor method to return DB2 cursor.
@@ -248,7 +233,7 @@ class DB2CursorWrapper:
         if getattr(self, 'connection', False):
             self.cursor.close()
 
-    def execute(self, query, params=()):
+    def execute(self, query, params = ()):
         if params:
             query = self.convert_query(query)
             query, params = self._replace_placeholders_in_select_clause(params, query)
