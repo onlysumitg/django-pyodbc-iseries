@@ -107,7 +107,6 @@ class DatabaseWrapper:
         if 'nam' in kwargs:
             kwargs['dsn'] += f"NAM={kwargs.get('nam')};"
             print("using naming..", f"NAM={kwargs.get('nam')}")
-            print("Current Connection String...", kwargs['dsn'])
             del kwargs['nam']
         # --------------------------------------------
         # Connection String: NAM SUMIT
@@ -131,7 +130,16 @@ class DatabaseWrapper:
 
             # extra coma not to set current schema
             kwargs['dsn'] += f"DBQ=,{libstring};"
-            print("Current Connection String...", kwargs['dsn'])
+
+
+
+        if 'cmt' in kwargs:
+            kwargs['dsn'] += f"CMT={kwargs.get('cmt')};"
+            del kwargs['cmt']
+
+        if 'trueautocommit' in kwargs:
+            kwargs['dsn'] += f"TRUEAUTOCOMMIT={kwargs.get('trueautocommit')};"
+            del kwargs['trueautocommit']
 
         '''
                 NO Change in connection string after this point 
