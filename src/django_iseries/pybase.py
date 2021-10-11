@@ -50,6 +50,7 @@ SQLCODE_0910_REGEX = re.compile(r"^(\[.+] *){4}SQL0910.*")
 class DatabaseWrapper:
     # Get new database connection for non persistance connection 
     def get_new_connection(self, kwargs):
+        print("Getting db connection",  __file__)
         driver_name = 'iSeries Access ODBC Driver' if platform.system() == 'Windows' else 'IBM i Access ODBC Driver'
         if 'port' in kwargs and 'host' in kwargs:
             kwargs['dsn'] = f"DRIVER={{{driver_name}}};DATABASE=%s;UNICODESQL=1;XDYNAMIC=1;" \
@@ -86,9 +87,12 @@ class DatabaseWrapper:
 
         conn_options = {'autocommit': False}
         kwargs['conn_options'] = conn_options
+
+
         if 'options' in kwargs:
             kwargs.update(kwargs.get('options'))  # merging kwargs[options:{}] in the kwargs
             del kwargs['options']
+
         if 'port' in kwargs:
             del kwargs['port']
 
@@ -180,6 +184,10 @@ class DatabaseWrapper:
         # ---------------------------------------------
         return connection
 
+   #------------------------------------------------------------------------------------------------------
+
+
+
     def is_active(self, connection = None):
         return bool(connection.cursor())
 
@@ -224,7 +232,9 @@ class DB2CursorWrapper:
 
     def get_current_schema(self):
         self.execute('select CURRENT_SCHEMA from sysibm.sysdummy1')
-        return self.fetchone()[0]
+        current_schema = self.fetchone()[0]
+        print("current_schema",current_schema,  __file__)
+        return current_schema
 
     def set_current_schema(self, schema):
         self.execute(f'SET CURRENT_SCHEMA = {schema}')

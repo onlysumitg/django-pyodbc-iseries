@@ -50,16 +50,20 @@ class DatabaseIntrospection(BaseDatabaseIntrospection):
     }
 
     def get_field_type(self, data_type, description):
+        print( __file__ , ">>" , __class__ , ">> get_field_type")
         return super(DatabaseIntrospection, self).get_field_type(data_type, description)
 
     # Getting the list of all tables, which are present under current schema.
     def get_table_list(self, cursor):
+        print( __file__ , ">>" , __class__ , ">> get_table_list")
+
         table_query = "SELECT TABLE_NAME, LOWER(TABLE_TYPE) FROM QSYS2.SYSTABLES WHERE TABLE_SCHEMA = CURRENT_SCHEMA"
         tables = cursor.execute(table_query)
         return [TableInfo(self.identifier_converter(t_name), t_type) for t_name, t_type in tables]
 
     # Generating a dictionary for foreign key details, which are present under current schema.
     def get_relations(self, cursor, table_name):
+        print( __file__ , ">>" , __class__ , ">> get_relations")
         relations = {}
         schema = cursor.get_current_schema()
         foreign_keys = list(cursor.foreignKeys(foreignTable=table_name.upper(), schema=schema))
@@ -71,6 +75,7 @@ class DatabaseIntrospection(BaseDatabaseIntrospection):
         return relations
 
     def get_key_columns(self, cursor, table_name):
+        print( __file__ , ">>" , __class__ , ">> get_key_columns")
         relations = []
         schema = cursor.get_current_schema()
         foreign_keys = list(cursor.foreignKeys(table=table_name.upper(), schema=schema))
@@ -82,6 +87,7 @@ class DatabaseIntrospection(BaseDatabaseIntrospection):
 
     # Getting the description of the table.
     def get_table_description(self, cursor, table_name):
+        print( __file__ , ">>" , __class__ , ">> get_table_description")
         qn = self.connection.ops.quote_name
         description = []
 
@@ -117,9 +123,11 @@ class DatabaseIntrospection(BaseDatabaseIntrospection):
                     *desc[2:],
                     None
                 ))
+        print( __file__ , ">>" , __class__ , ">> get_table_description  >> description" , description)
         return description
 
     def get_constraints(self, cursor, table_name):
+        print( __file__ , ">>" , __class__ , ">> get_constraints")
         constraints = {}
         schema = None
         sql = "SELECT TYPE FROM QSYS2.SYSTABLES WHERE TABLE_SCHEMA=CURRENT_SCHEMA AND TABLE_NAME=?"
@@ -173,6 +181,7 @@ class DatabaseIntrospection(BaseDatabaseIntrospection):
         return constraints
 
     def get_sequences(self, cursor, table_name, table_fields=()):
+        print( __file__ , ">>" , __class__ , ">> get_sequences")
         from django.db import models
 
         seq_list = []
@@ -183,4 +192,5 @@ class DatabaseIntrospection(BaseDatabaseIntrospection):
         return seq_list
 
     def identifier_converter(self, name):
+        print( __file__ , ">>" , __class__ , ">> identifier_converter")
         return name.lower()
