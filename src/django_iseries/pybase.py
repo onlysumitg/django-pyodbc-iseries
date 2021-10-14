@@ -223,10 +223,10 @@ class DB2CursorWrapper:
 
     def get_current_schema(self):
         if self.current_schema is not None:
-            return self.current_schema
+            return self.current_schema.upper()
         self.execute('select CURRENT_SCHEMA from sysibm.sysdummy1')
         self.current_schema = self.fetchone()[0]
-        return self.current_schema
+        return self.current_schema.upper()
 
     def set_current_schema(self, schema):
         self.execute(f'SET CURRENT_SCHEMA = {schema}')

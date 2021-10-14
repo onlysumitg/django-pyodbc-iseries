@@ -194,7 +194,7 @@ class DatabaseIntrospection(BaseDatabaseIntrospection):
                    FROM QSYS2.SYSTABLES 
                   WHERE SYSTEM_TABLE_SCHEMA=? 
                     AND SYSTEM_TABLE_NAME=?"""
-        c1 = cursor.execute(sql, [schema, table_name])
+        c1 = cursor.execute(sql, [schema, table_name.upper(),])
 
         table_type = cursor.fetchone()[0]
 
@@ -250,7 +250,7 @@ class DatabaseIntrospection(BaseDatabaseIntrospection):
         seq_list = []
         for f in table_fields:
             if (isinstance(f, models.AutoField)):
-                seq_list.append({'table': table_name, 'column': f.column})
+                seq_list.append({'table': table_name.upper(), 'column': f.column})
                 break
         return seq_list
 
