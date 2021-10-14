@@ -50,7 +50,6 @@ SQLCODE_0910_REGEX = re.compile(r"^(\[.+] *){4}SQL0910.*")
 class DatabaseWrapper:
     # Get new database connection for non persistance connection 
     def get_new_connection(self, kwargs):
-        print("Getting db connection",  __file__)
         driver_name = 'iSeries Access ODBC Driver' if platform.system() == 'Windows' else 'IBM i Access ODBC Driver'
         if 'port' in kwargs and 'host' in kwargs:
             kwargs['dsn'] = f"DRIVER={{{driver_name}}};DATABASE=%s;UNICODESQL=1;XDYNAMIC=1;" \
@@ -88,7 +87,6 @@ class DatabaseWrapper:
         conn_options = {'autocommit': False}
         kwargs['conn_options'] = conn_options
 
-
         if 'options' in kwargs:
             kwargs.update(kwargs.get('options'))  # merging kwargs[options:{}] in the kwargs
             del kwargs['options']
@@ -110,7 +108,6 @@ class DatabaseWrapper:
 
         if 'nam' in kwargs:
             kwargs['dsn'] += f"NAM={kwargs.get('nam')};"
-            print("using naming..", f"NAM={kwargs.get('nam')}")
             del kwargs['nam']
         # --------------------------------------------
         # Connection String: NAM SUMIT
@@ -129,13 +126,13 @@ class DatabaseWrapper:
         if 'dbq' in kwargs:
             liblist = kwargs.pop('dbq', [])
             libstring = ""
+            if currentschema is None:
+                currentschema = liblist[0]
             if liblist:
                 libstring = ",".join(liblist)
 
             # extra coma not to set current schema
             kwargs['dsn'] += f"DBQ=,{libstring};"
-
-
 
         if 'cmt' in kwargs:
             kwargs['dsn'] += f"CMT={kwargs.get('cmt')};"
@@ -160,33 +157,25 @@ class DatabaseWrapper:
         # add default message reply ADDRPYLE  # sumit
 
         message_replies = kwargs.pop('message_replies', [])
-        print("message_replies", message_replies)
         cursor = connection.cursor()
         for message_reply in message_replies:
-            print("processing message_replies")
             seq, message_id, reply = message_reply
             try:
-                call_string= "call QSYS2.QCMDEXC('ADDRPYLE SEQNBR({}) MSGID({}) RPY({})')".format(seq, message_id, reply)
-                print("running...","{"+call_string+"}")
-                cursor.execute("{"+call_string+"}")
+                call_string = "call QSYS2.QCMDEXC('ADDRPYLE SEQNBR({}) MSGID({}) RPY({})')".format(seq, message_id,
+                                                                                                   reply)
+                cursor.execute("{" + call_string + "}")
             except Exception as e:
-                for a in e.args:
-                    print("point1" , a)
-                    print("--" * 33)
+                pass
 
         try:
             cursor.execute("{call QSYS2.QCMDEXC('CHGJOB  INQMSGRPY(*SYSRPYL)')}")
         except Exception as e:
-            for a in e.args:
-                print("point2", a)
-                print("++" * 33)
+            pass
 
         # ---------------------------------------------
         return connection
 
-   #------------------------------------------------------------------------------------------------------
-
-
+    # ------------------------------------------------------------------------------------------------------
 
     def is_active(self, connection = None):
         return bool(connection.cursor())
@@ -215,11 +204,13 @@ class DatabaseWrapper:
 class DB2CursorWrapper:
     """
     This is the wrapper around IBM_DB_DBI in order to support format parameter style
-    IBM_DB_DBI supports qmark, where as Django support format style, 
+    IBM_DB_DBI supports qmark, where as Django support format style,
     hence this conversion is required.
 
     pyodbc.Cursor cannot be subclassed, so we store it as an attribute
     """
+
+    current_schema = None
 
     def __init__(self, connection):
         self.cursor: Database.Cursor = connection.cursor()
@@ -231,10 +222,11 @@ class DB2CursorWrapper:
         return getattr(self.cursor, attr)
 
     def get_current_schema(self):
+        if self.current_schema is not None:
+            return self.current_schema
         self.execute('select CURRENT_SCHEMA from sysibm.sysdummy1')
-        current_schema = self.fetchone()[0]
-        print("current_schema",current_schema,  __file__)
-        return current_schema
+        self.current_schema = self.fetchone()[0]
+        return self.current_schema
 
     def set_current_schema(self, schema):
         self.execute(f'SET CURRENT_SCHEMA = {schema}')
@@ -285,6 +277,8 @@ class DB2CursorWrapper:
                         "transaction as insert/update on that table"
                     )
             raise type(e)(*e.args, execute.func, execute.args)
+        except Exception as e:
+            pass
         if result == self.cursor:
             return self
         return result
