@@ -101,7 +101,7 @@ class DatabaseIntrospection(BaseDatabaseIntrospection):
         schema = cursor.get_current_schema()
         sql = """SELECT TYPE 
                    FROM QSYS2.SYSTABLES 
-                  WHERE SYSYEM_TABLE_SCHEMA=? 
+                  WHERE SYSTEM_TABLE_SCHEMA=? 
                     AND SYSTEM_TABLE_NAME=?"""
         cursor.execute(sql, [schema,table_name.upper()])
         table_type = cursor.fetchone()[0]
