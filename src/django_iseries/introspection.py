@@ -138,11 +138,14 @@ class DatabaseIntrospection(BaseDatabaseIntrospection):
                     case when IDENTITY_GENERATION IS NULL then COLUMN_DEFAULT else concat('**',ifnull(COLUMN_DEFAULT,'')) end as COLUMN_DEFAULT
                        FROM QSYS2.SYSCOLUMNS C
                      WHERE SYSTEM_TABLE_NAME = ?
-                       AND SYSTEM_TABLE_SCHEMA = COALESCE(?, ?)
+                       AND SYSTEM_TABLE_SCHEMA = ?
                      ORDER BY ORDINAL_POSITION                  
                     """
+            current_schema = cursor.get_current_schema()
+            if schema is not None:
+                current_schema = schema
 
-            column_descriptions = cursor.execute(sql, [table_name.upper(), schema, cursor.get_current_schema()])
+            column_descriptions = cursor.execute(sql, [table_name.upper(),  current_schema,])
 
             """
             # Structure returned by the DB-API cursor.description interface (PEP 249)
