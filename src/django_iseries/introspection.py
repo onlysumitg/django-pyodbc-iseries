@@ -20,9 +20,11 @@ from collections import namedtuple
 from . import Database
 
 try:
-    from django.db.backends import BaseDatabaseIntrospection, FieldInfo
+    from django.db.backends import BaseDatabaseIntrospection, FieldInfo as BaseFieldInfo
 except ImportError:
-    from django.db.backends.base.introspection import BaseDatabaseIntrospection, FieldInfo
+    from django.db.backends.base.introspection import BaseDatabaseIntrospection, FieldInfo as BaseFieldInfo
+
+FieldInfo = namedtuple('FieldInfo', BaseFieldInfo._fields + ('label', 'hint'))
 
 TableInfo = namedtuple('TableInfo', ['name', 'type'])
 
@@ -135,7 +137,9 @@ class DatabaseIntrospection(BaseDatabaseIntrospection):
                     NUMERIC_SCALE,
                     CASE IS_NULLABLE WHEN 'Y' THEN 1 ELSE 0 END AS IS_NULLABLE,
                     HAS_DEFAULT,
-                    case when IDENTITY_GENERATION IS NULL then COLUMN_DEFAULT else concat('**',ifnull(COLUMN_DEFAULT,'')) end as COLUMN_DEFAULT
+                    case when IDENTITY_GENERATION IS NULL then COLUMN_DEFAULT else concat('**',ifnull(COLUMN_DEFAULT,'')) end as COLUMN_DEFAULT,
+                    ifnull(COLUMN_HEADING,'') as COLUMN_HEADING,
+                    ifnull(COLUMN_TEXT,'') as COLUMN_TEXT
                        FROM QSYS2.SYSCOLUMNS C
                      WHERE SYSTEM_TABLE_NAME = ?
                        AND SYSTEM_TABLE_SCHEMA = ?
@@ -160,6 +164,8 @@ class DatabaseIntrospection(BaseDatabaseIntrospection):
                 null_ok         IS_NULLABLE  
                 default          COLUMN_DEFAULT     HAS_DEFAULT->   https://www.ibm.com/docs/en/i/7.3?topic=views-syscolumns 
                 collation '
+                label,
+                hint
                                                 
             )
             
@@ -185,7 +191,9 @@ class DatabaseIntrospection(BaseDatabaseIntrospection):
                     True if desc.IS_NULLABLE == 1 else False,
                     desc.COLUMN_DEFAULT.replace("'", "") if desc.COLUMN_DEFAULT else None,
 
-                    None
+                    None,
+                    desc.COLUMN_HEADING,
+                    desc.COLUMN_TEXT
                 ))
         return description
 

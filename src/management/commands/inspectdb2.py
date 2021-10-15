@@ -161,6 +161,12 @@ class Command(BaseCommand):
                     if row.default:
                         extra_params['default'] = row.default
 
+                    if row.label:
+                        extra_params['verbose_name'] = row.label
+
+                    if row.hint:
+                        extra_params['help_text'] = row.hint
+
                     field_desc = '%s = %s%s' % (
                         att_name,
                         # Custom fields will have a dotted path
