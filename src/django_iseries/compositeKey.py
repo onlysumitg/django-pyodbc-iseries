@@ -1,3 +1,10 @@
+"""
+This code was copied from django viewflow
+Looks like new version does not contain this class
+So, this can be used as backup
+
+"""
+
 import datetime
 import decimal
 import json
