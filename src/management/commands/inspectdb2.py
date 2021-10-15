@@ -68,125 +68,129 @@ class Command(BaseCommand):
 
 
         for table_name in (options['table'] or sorted(info.name for info in table_info if info.type in types)):
-                if table_name_filter is not None and callable(table_name_filter):
-                    if not table_name_filter(table_name):
-                        continue
-                try:
-                    with connection.cursor() as cursor:  # use a new cursor
-                        try:
-                            relations = connection.introspection.get_relations(cursor, table_name)
-                        except NotImplementedError:
-                            relations = {}
-                    with connection.cursor() as cursor:  # use a new cursor
-                        try:
-                            constraints = connection.introspection.get_constraints(cursor, table_name)
-                        except NotImplementedError:
-                            constraints = {}
-                        primary_key_column = connection.introspection.get_primary_key_column(cursor, table_name)
-                        unique_columns = [
-                            c['columns'][0] for c in constraints.values()
-                            if c['unique'] and len(c['columns']) == 1
-                        ]
-                    with connection.cursor() as cursor:
-                        table_description = connection.introspection.get_table_description(cursor, table_name)
-                except Exception as e:
-                    yield "# Unable to inspect table '%s'" % table_name
-                    yield "# The error was: %s" % e
+            if table_name_filter is not None and callable(table_name_filter):
+                if not table_name_filter(table_name):
                     continue
+            try:
+                with connection.cursor() as cursor:  # use a new cursor
+                    try:
+                        relations = connection.introspection.get_relations(cursor, table_name)
+                    except NotImplementedError:
+                        relations = {}
+                with connection.cursor() as cursor:  # use a new cursor
+                    try:
+                        constraints = connection.introspection.get_constraints(cursor, table_name)
+                    except NotImplementedError:
+                        constraints = {}
+                    primary_key_column = connection.introspection.get_primary_key_column(cursor, table_name)
+                    unique_columns = [
+                        c['columns'][0] for c in constraints.values()
+                        if c['unique'] and len(c['columns']) == 1
+                    ]
+                with connection.cursor() as cursor:
+                    table_description = connection.introspection.get_table_description(cursor, table_name)
+            except Exception as e:
+                yield "# Unable to inspect table '%s'" % table_name
+                yield "# The error was: %s" % e
+                continue
 
-                yield ''
-                yield ''
-                yield 'class %s(models.Model):' % table2model(table_name)
-                known_models.append(table2model(table_name))
-                used_column_names = []  # Holds column names used in the table so far
-                column_to_field_name = {}  # Maps column names to names of model fields
-                for row in table_description:
-                    comment_notes = []  # Holds Field notes, to be displayed in a Python comment.
-                    extra_params = {}  # Holds Field parameters such as 'db_column'.
-                    column_name = row.name
-                    is_relation = column_name in relations
+            yield ''
+            yield ''
+            yield 'class %s(models.Model):' % table2model(table_name)
+            known_models.append(table2model(table_name))
+            used_column_names = []  # Holds column names used in the table so far
+            column_to_field_name = {}  # Maps column names to names of model fields
+            for row in table_description:
+                comment_notes = []  # Holds Field notes, to be displayed in a Python comment.
+                extra_params = {}  # Holds Field parameters such as 'db_column'.
+                column_name = row.name
+                is_relation = column_name in relations
 
-                    att_name, params, notes = self.normalize_col_name(
-                        column_name, used_column_names, is_relation, row.label, row.hint)
-                    extra_params.update(params)
-                    comment_notes.extend(notes)
+                att_name, params, notes = self.normalize_col_name(
+                    column_name, used_column_names, is_relation, row.label, row.hint)
+                extra_params.update(params)
+                comment_notes.extend(notes)
 
-                    used_column_names.append(att_name)
-                    column_to_field_name[column_name] = att_name
+                used_column_names.append(att_name)
+                column_to_field_name[column_name] = att_name
 
-                    # Add primary_key and unique, if necessary.
-                    if column_name == primary_key_column:
-                        extra_params['primary_key'] = True
-                    elif column_name in unique_columns:
-                        extra_params['unique'] = True
+                # Add primary_key and unique, if necessary.
+                if column_name == primary_key_column:
+                    extra_params['primary_key'] = True
+                elif column_name in unique_columns:
+                    extra_params['unique'] = True
 
-                    if is_relation:
-                        if extra_params.pop('unique', False) or extra_params.get('primary_key'):
-                            rel_type = 'OneToOneField'
-                        else:
-                            rel_type = 'ForeignKey'
-                        rel_to = (
-                            "self" if relations[column_name][1] == table_name
-                            else table2model(relations[column_name][1])
-                        )
-                        if rel_to in known_models:
-                            field_type = '%s(%s' % (rel_type, rel_to)
-                        else:
-                            field_type = "%s('%s'" % (rel_type, rel_to)
+                if is_relation:
+                    if extra_params.pop('unique', False) or extra_params.get('primary_key'):
+                        rel_type = 'OneToOneField'
                     else:
-                        # Calling `get_field_type` to get the field type string and any
-                        # additional parameters and notes.
-                        field_type, field_params, field_notes = self.get_field_type(connection, table_name, row)
-                        extra_params.update(field_params)
-                        comment_notes.extend(field_notes)
-
-                        field_type += '('
-
-                    # Don't output 'id = meta.AutoField(primary_key=True)', because
-                    # that's assumed if it doesn't exist.
-                    if att_name == 'id' and extra_params == {'primary_key': True}:
-                        if field_type == 'AutoField(':
-                            continue
-                        elif field_type == connection.features.introspected_field_types['AutoField'] + '(':
-                            comment_notes.append('AutoField?')
-
-                    # Add 'null' and 'blank', if the 'null_ok' flag was present in the
-                    # table description.
-                    if row.null_ok:  # If it's NULL...
-                        extra_params['blank'] = True
-                        extra_params['null'] = True
-                    else:
-                        extra_params['null'] = False
-
-                    if row.default:
-                        extra_params['default'] = row.default
-
-                    if row.label:
-                        extra_params['verbose_name'] = row.label
-
-                    if row.hint:
-                        extra_params['help_text'] = row.hint
-
-                    field_desc = '%s = %s%s' % (
-                        att_name,
-                        # Custom fields will have a dotted path
-                        '' if '.' in field_type else 'models.',
-                        field_type,
+                        rel_type = 'ForeignKey'
+                    rel_to = (
+                        "self" if relations[column_name][1] == table_name
+                        else table2model(relations[column_name][1])
                     )
-                    if field_type.startswith(('ForeignKey(', 'OneToOneField(')):
-                        field_desc += ', models.DO_NOTHING'
+                    if rel_to in known_models:
+                        field_type = '%s(%s' % (rel_type, rel_to)
+                    else:
+                        field_type = "%s('%s'" % (rel_type, rel_to)
+                else:
+                    # Calling `get_field_type` to get the field type string and any
+                    # additional parameters and notes.
+                    field_type, field_params, field_notes = self.get_field_type(connection, table_name, row)
+                    extra_params.update(field_params)
+                    comment_notes.extend(field_notes)
 
-                    if extra_params:
-                        if not field_desc.endswith('('):
-                            field_desc += ', '
-                        field_desc += ', '.join('%s=%r' % (k, v) for k, v in extra_params.items())
-                    field_desc += ')'
-                    if comment_notes:
-                        field_desc += '  # ' + ' '.join(comment_notes)
-                    yield '    %s' % field_desc
-                is_view = any(info.name == table_name and info.type == 'v' for info in table_info)
-                is_partition = any(info.name == table_name and info.type == 'p' for info in table_info)
-                yield from self.get_meta(table_name, constraints, column_to_field_name, is_view, is_partition)
+                    field_type += '('
+
+                # Don't output 'id = meta.AutoField(primary_key=True)', because
+                # that's assumed if it doesn't exist.
+                if att_name == 'id' and extra_params == {'primary_key': True}:
+                    if field_type == 'AutoField(':
+                        continue
+                    elif field_type == connection.features.introspected_field_types['AutoField'] + '(':
+                        comment_notes.append('AutoField?')
+
+                # Add 'null' and 'blank', if the 'null_ok' flag was present in the
+                # table description.
+                if row.null_ok:  # If it's NULL...
+                    extra_params['blank'] = True
+                    extra_params['null'] = True
+                else:
+                    extra_params['null'] = False
+
+                if row.default:
+                    extra_params['default'] = row.default
+
+                if row.label:
+                    extra_params['verbose_name'] = row.label
+
+                if row.hint:
+                    extra_params['help_text'] = row.hint
+
+                field_desc = '%s = %s%s' % (
+                    att_name,
+                    # Custom fields will have a dotted path
+                    '' if '.' in field_type else 'models.',
+                    field_type,
+                )
+                if field_type.startswith(('ForeignKey(', 'OneToOneField(')):
+                    field_desc += ', models.DO_NOTHING'
+
+                if extra_params:
+                    if not field_desc.endswith('('):
+                        field_desc += ', '
+                    field_desc += ', '.join('%s=%r' % (k, v) for k, v in extra_params.items())
+                field_desc += ')'
+                if comment_notes:
+                    field_desc += '  # ' + ' '.join(comment_notes)
+                yield '    %s' % field_desc
+            is_view = any(info.name == table_name and info.type == 'v' for info in table_info)
+            is_partition = any(info.name == table_name and info.type == 'p' for info in table_info)
+            long_table_name=""
+            temp = [info.long_name for info in table_info if info.name==table_name]
+            if temp:
+                long_table_name = temp[0]
+            yield from self.get_meta(table_name, constraints, column_to_field_name, is_view, is_partition,long_table_name)
 
     def normalize_col_name(self, col_name, used_column_names, is_relation, verbose_name=None, help_text =None):
         """
@@ -198,9 +202,11 @@ class Command(BaseCommand):
         new_name = col_name.lower()
 
         if help_text:
+            field_params['db_column'] = col_name
             new_name = help_text.lower()
 
         if verbose_name:
+            field_params['db_column'] = col_name
             new_name = verbose_name.lower()
 
         if new_name != col_name:
@@ -287,7 +293,7 @@ class Command(BaseCommand):
 
         return field_type, field_params, field_notes
 
-    def get_meta(self, table_name, constraints, column_to_field_name, is_view, is_partition):
+    def get_meta(self, table_name, constraints, column_to_field_name, is_view, is_partition,long_table_name=""):
         """
         Return a sequence comprising the lines of code necessary
         to construct the inner Meta class for the model corresponding
@@ -315,7 +321,9 @@ class Command(BaseCommand):
         meta += [
             '    class Meta:',
             '        managed = False%s' % managed_comment,
-            '        db_table = %r' % table_name
+            '        db_table = %r' % table_name ,
+           f'        verbose_name={long_table_name}',
+           f'        verbose_name_plural={long_table_name}s',
         ]
         if unique_together:
             tup = '(' + ', '.join(unique_together) + ',)'

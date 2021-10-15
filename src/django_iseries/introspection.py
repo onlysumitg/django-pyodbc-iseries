@@ -26,7 +26,7 @@ except ImportError:
 
 FieldInfo = namedtuple('FieldInfo', BaseFieldInfo._fields + ('label', 'hint'))
 
-TableInfo = namedtuple('TableInfo', ['name', 'type'])
+TableInfo = namedtuple('TableInfo', ['name', 'type' ,'long_name'])
 
 
 class DatabaseIntrospection(BaseDatabaseIntrospection):
@@ -65,13 +65,13 @@ class DatabaseIntrospection(BaseDatabaseIntrospection):
     # Getting the list of all tables, which are present under current schema.
     def get_table_list(self, cursor):
         schema = cursor.get_current_schema()
-        table_query = """SELECT SYSTEM_TABLE_NAME, LOWER(TABLE_TYPE) 
+        table_query = """SELECT SYSTEM_TABLE_NAME, LOWER(TABLE_TYPE) ,TABLE_NAME
                           FROM QSYS2.SYSTABLES 
                          WHERE SYSTEM_TABLE_SCHEMA = ? """
 
         tables = cursor.execute(table_query, [schema, ])
 
-        return [TableInfo(self.identifier_converter(t_name), t_type) for t_name, t_type in tables]
+        return [TableInfo(self.identifier_converter(t_name), t_type , self.identifier_converter(t_long_name)) for t_name, t_type,t_long_name in tables]
 
     # Generating a dictionary for foreign key details, which are present under current schema.
     def get_relations(self, cursor, table_name):
