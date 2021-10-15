@@ -29,7 +29,6 @@ class Command(BaseCommand):
         )
 
     def handle(self, **options):
-        print("running inspectdb2", __file__)
         try:
             for line in self.handle_inspection(options):
                 self.stdout.write(line)
@@ -187,10 +186,16 @@ class Command(BaseCommand):
             is_view = any(info.name == table_name and info.type == 'v' for info in table_info)
             is_partition = any(info.name == table_name and info.type == 'p' for info in table_info)
             long_table_name=""
-            temp = [info.long_name for info in table_info if info.name==table_name]
+
+            temp = [info.long_name for info in table_info if (info.name).upper().strip()==table_name.upper().strip()]
             if temp:
                 long_table_name = temp[0]
+
+            if not long_table_name:
+                long_table_name = table_name.upper().strip()
+
             yield from self.get_meta(table_name, constraints, column_to_field_name, is_view, is_partition,long_table_name)
+            yield from self.get_do_insert()
 
     def normalize_col_name(self, col_name, used_column_names, is_relation, verbose_name=None, help_text =None):
         """
@@ -328,10 +333,30 @@ class Command(BaseCommand):
             '    class Meta:',
             '        managed = False%s' % managed_comment,
             '        db_table = %r' % table_name ,
-            f'        verbose_name={long_table_name}',
-            f'        verbose_name_plural={long_table_name}s',
+            f"        verbose_name='{long_table_name}'",
+            f"        verbose_name_plural='{long_table_name}s'",
             ]
         if unique_together:
             tup = '(' + ', '.join(unique_together) + ',)'
             meta += ["        unique_together = %s" % tup]
         return meta
+
+
+    def get_do_insert(self):
+        """
+        Return a sequence comprising the lines of code necessary
+        to construct the inner Meta class for the model corresponding
+        to the given database table name.
+        """
+
+        _do_insert = ['']
+        _do_insert.append('    # Remove Auto Generated columns from the INSERT statement')
+        _do_insert += [
+            '    def _do_insert(self, manager, using, fields, update_pk, raw):',
+            '        return super()._do_insert(',
+            '           manager, using,' ,
+            f"           [f for f in fields if f.get_default() is not None and not f.get_default().startswith('**')],",
+            f'           update_pk, raw)',
+        ]
+
+        return _do_insert
