@@ -201,15 +201,20 @@ class Command(BaseCommand):
 
         new_name = col_name.lower()
 
+        message = ""
         if help_text:
             field_params['db_column'] = col_name
+            message ="Using Column Text as Column name."
             new_name = help_text.lower()
 
         if verbose_name:
             field_params['db_column'] = col_name
+            message ="Using Column Heading as Column name."
             new_name = verbose_name.lower()
 
-        if new_name != col_name:
+        if message:
+            field_notes.append(message)
+        elif new_name != col_name:
             field_notes.append('Field name made lowercase.')
 
         if is_relation:
@@ -235,8 +240,9 @@ class Command(BaseCommand):
             field_notes.append("Field renamed because it started with '_'.")
 
         if new_name.endswith('_'):
-            new_name = '%sfield' % new_name
-            field_notes.append("Field renamed because it ended with '_'.")
+            #new_name = '%sfield' % new_name  ## add _field
+            new_name = new_name.strip("_")  ## remove last _
+            field_notes.append("Removed last _ .")
 
         if keyword.iskeyword(new_name):
             new_name += '_field'
@@ -322,9 +328,9 @@ class Command(BaseCommand):
             '    class Meta:',
             '        managed = False%s' % managed_comment,
             '        db_table = %r' % table_name ,
-           f'        verbose_name={long_table_name}',
-           f'        verbose_name_plural={long_table_name}s',
-        ]
+            f'        verbose_name={long_table_name}',
+            f'        verbose_name_plural={long_table_name}s',
+            ]
         if unique_together:
             tup = '(' + ', '.join(unique_together) + ',)'
             meta += ["        unique_together = %s" % tup]
