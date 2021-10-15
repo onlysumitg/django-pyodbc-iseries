@@ -192,8 +192,9 @@ class DatabaseIntrospection(BaseDatabaseIntrospection):
                     desc.COLUMN_DEFAULT.replace("'", "") if desc.COLUMN_DEFAULT else None,
 
                     None,
-                    desc.COLUMN_HEADING,
-                    desc.COLUMN_TEXT
+                    ' '.join(x for x in desc.COLUMN_HEADING.split(' ') if x.strip()) ,
+                    ' '.join(x for x in desc.COLUMN_TEXT.split(' ') if x.strip())
+
                 ))
         return description
 

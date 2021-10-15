@@ -107,7 +107,7 @@ class Command(BaseCommand):
                     is_relation = column_name in relations
 
                     att_name, params, notes = self.normalize_col_name(
-                        column_name, used_column_names, is_relation, row.label, row.hint)
+                        column_name, used_column_names, is_relation)
                     extra_params.update(params)
                     comment_notes.extend(notes)
 
@@ -188,7 +188,7 @@ class Command(BaseCommand):
                 is_partition = any(info.name == table_name and info.type == 'p' for info in table_info)
                 yield from self.get_meta(table_name, constraints, column_to_field_name, is_view, is_partition)
 
-    def normalize_col_name(self, col_name, used_column_names, is_relation, verbose_name=None, help_text =None):
+    def normalize_col_name(self, col_name, used_column_names, is_relation):
         """
         Modify the column name to make it Python-compatible as a field name
         """
@@ -196,13 +196,6 @@ class Command(BaseCommand):
         field_notes = []
 
         new_name = col_name.lower()
-
-        if help_text:
-            new_name = help_text.lower()
-
-        if verbose_name:
-            new_name = verbose_name.lower()
-
         if new_name != col_name:
             field_notes.append('Field name made lowercase.')
 
