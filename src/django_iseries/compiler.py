@@ -30,7 +30,7 @@ class SQLCompiler(compiler.SQLCompiler):
 
         sql, params, *_ = super().as_sql()
 
-        original_string = f'"{self.query.base_table}"."RRN({self.query.base_table})"'
+        original_string = f'"{self.query.base_table}"."RRN()"'
         new_string = f"RRN({self.query.base_table})"
         sql = sql.replace(original_string, new_string)
 
@@ -54,7 +54,7 @@ class SQLDeleteCompiler(compiler.SQLDeleteCompiler, SQLCompiler):
 
         sql, params, *_ = super().as_sql()
 
-        original_string = f'"{self.query.base_table}"."RRN({self.query.base_table})"'
+        original_string = f'"{self.query.base_table}"."RRN()"'
         new_string = f"RRN({self.query.base_table})"
         sql = sql.replace(original_string, new_string)
 
@@ -69,7 +69,7 @@ class SQLUpdateCompiler(compiler.SQLUpdateCompiler, SQLCompiler):
 
         sql, params, *_ = super().as_sql()
 
-        original_string = f'"{self.query.base_table}"."RRN({self.query.base_table})"'
+        original_string = f'"{self.query.base_table}"."RRN()"'
         new_string = f"RRN({self.query.base_table})"
         sql = sql.replace(original_string, new_string)
 
@@ -84,7 +84,7 @@ class SQLAggregateCompiler(compiler.SQLAggregateCompiler, SQLCompiler):
 
         sql, params, *_ = super().as_sql()
 
-        original_string = f'"{self.query.base_table}"."RRN({self.query.base_table})"'
+        original_string = f'"{self.query.base_table}"."RRN()"'
         new_string = f"RRN({self.query.base_table})"
         sql = sql.replace(original_string, new_string)
 
