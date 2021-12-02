@@ -350,13 +350,12 @@ class Command(BaseCommand):
         """
 
         _do_insert = ['']
-        _do_insert.append('    # Remove Auto Generated columns from the INSERT statement')
+        _do_insert.append('    # Remove Auto Generated columns from the INSERT/UPDATE statement')
         _do_insert += [
-            '    def _do_insert(self, manager, using, fields, update_pk, raw):',
-            '        return super()._do_insert(',
-            '           manager, using,' ,
-            f"           [f for f in fields if f.get_default() is not None and not f.get_default().startswith('**')],",
-            f'           update_pk, raw)',
+            '     def save(self, *args, **kwargs):',
+            "          self._meta.local_fields = [f for f in self._meta.local_fields if f.get_default() is not None and not f.get_default().startswith('**')]",
+            '          super().save(*args, **kwargs)' ,
+
         ]
 
         return _do_insert
