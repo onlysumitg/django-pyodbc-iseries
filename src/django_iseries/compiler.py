@@ -24,7 +24,17 @@ from itertools import zip_longest
 
 
 class SQLCompiler(compiler.SQLCompiler):
-    pass
+    def as_sql(self):
+        """Support returning identity val with single query."""
+        """ Sumit here goes the select * from """
+
+        sql, params, *_ = super().as_sql()
+
+        original_string = f'"{self.query.base_table}"."RRN({self.query.base_table})"'
+        new_string = f"RRN({self.query.base_table})"
+        sql = sql.replace(original_string, new_string)
+
+        return (sql, params)
 
 
 class SQLInsertCompiler(compiler.SQLInsertCompiler, SQLCompiler):

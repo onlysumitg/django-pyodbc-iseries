@@ -77,7 +77,12 @@ class DatabaseIntrospection(BaseDatabaseIntrospection):
     def get_relations(self, cursor, table_name):
         relations = {}
         schema = cursor.get_current_schema()
-        foreign_keys = list(cursor.foreignKeys(foreignTable=table_name.upper(), schema=schema))
+        foreign_keys = []
+        try:
+            foreign_keys = list(cursor.foreignKeys(foreignTable=table_name.upper(), schema=schema))
+        except Exception as e:
+            pass
+            #print("exception in get_relations >>> " ,e)
         for fk in foreign_keys:
             relations[self.identifier_converter(fk.fkcolumn_name)] = (
                 self.identifier_converter(fk.pkcolumn_name),
