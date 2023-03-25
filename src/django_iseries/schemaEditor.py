@@ -36,6 +36,9 @@ Error = Database.Error
 
 class DB2SchemaEditor(BaseDatabaseSchemaEditor):
     psudo_column_prefix = 'psudo_'
+
+    # https://docs.djangoproject.com/en/1.8/_modules/django/db/backends/base/schema/
+    sql_create_table = "CREATE OR REPLACE TABLE %(table)s (%(definition)s)"
     sql_delete_table = "DROP TABLE %(table)s"
     sql_rename_table = "RENAME TABLE %(old_table)s TO %(new_table)s"
     sql_create_column = "ALTER TABLE %(table)s ADD COLUMN %(column)s %(definition)s"
