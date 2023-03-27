@@ -257,6 +257,8 @@ class DB2CursorWrapper:
         result = self._wrap_execute(partial(self.cursor.executemany, query, param_list))
         return result
 
+
+    # sumit execute sql here 
     def _wrap_execute(self, execute):
         try:
             result = execute()

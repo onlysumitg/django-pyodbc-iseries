@@ -89,11 +89,20 @@ class DatabaseCreation(BaseDatabaseCreation):
                                            model._meta.pk.attname, column_list)
                 column_list.extend(
                     [truncate_name("%s%s" % (self.psudo_column_prefix, "_".join(column_list)), max_name_length)])
+
+                # sumit27
+                output.extend([style.SQL_KEYWORD('DROP INDEX') + ' ' + \
+                               style.SQL_TABLE(qn('db2_%s_%s' % (model._meta.db_table, i)))])
+
+
                 output.extend([style.SQL_KEYWORD('CREATE UNIQUE INDEX') + ' ' + \
                                style.SQL_TABLE(qn('db2_%s_%s' % (model._meta.db_table, i))) + ' ' + \
                                style.SQL_KEYWORD('ON') + ' ' + \
                                style.SQL_TABLE(qn(model._meta.db_table)) + ' ' + \
                                '( %s )' % ", ".join(column_list)])
+
+
+
             model._meta.unique_together_index = []
 
         if f.unique_index:
@@ -101,6 +110,10 @@ class DatabaseCreation(BaseDatabaseCreation):
             column_list.extend([f.column])
             self.__add_psudokey_column(style, self.connection.cursor(), model._meta.db_table,
                                        model._meta.pk.attname, column_list)
+            # sumit27
+            output.extend([style.SQL_KEYWORD('DROP INDEX') + ' ' + \
+                               style.SQL_TABLE(qn('%s_%s' % (model._meta.db_table, f.column)))])
+
             cisql = 'CREATE UNIQUE INDEX'
             output.extend([style.SQL_KEYWORD(cisql) + ' ' +
                            style.SQL_TABLE(qn('%s_%s' % (model._meta.db_table, f.column))) + ' ' +
@@ -111,6 +124,10 @@ class DatabaseCreation(BaseDatabaseCreation):
             return output
 
         if f.db_index and not f.unique:
+            # sumit27
+            output.extend([style.SQL_KEYWORD('DROP INDEX') + ' ' + \
+                              style.SQL_TABLE(qn('%s_%s' % (model._meta.db_table, f.column))) ])
+
             cisql = 'CREATE INDEX'
             output.extend([style.SQL_KEYWORD(cisql) + ' ' +
                            style.SQL_TABLE(qn('%s_%s' % (model._meta.db_table, f.column))) + ' ' +
