@@ -265,7 +265,9 @@ class DB2CursorWrapper:
         except Database.Error as e:
             # iaccess seems to be sending incorrect sqlstate for some errors
             # reraise "referential constraint violation" errors as IntegrityError
-            if e.args[0] == 'HY000' and SQLCODE_0530_REGEX.match(e.args[1]):
+            if e.args[0] == '42S01':
+                return
+            elif e.args[0] == 'HY000' and SQLCODE_0530_REGEX.match(e.args[1]):
                 raise utils.IntegrityError(*e.args, execute.func, *execute.args)
             elif e.args[0] == 'HY000' and SQLCODE_0910_REGEX.match(e.args[1]):
                 # file in use error (likely in the same transaction)
