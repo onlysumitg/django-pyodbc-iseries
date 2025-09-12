@@ -21,6 +21,12 @@ Install Django as per instructions from the Django [http://docs.djangoproject.co
 ```  
 $ pip install django-pyodbc-iseries  
 ```
+
+pipenv
+
+```
+$ pipenv install git+https://github.com/onlysumitg/django-pyodbc-iseries.git#egg=django-iseries
+```
  
 # Tested Operating Systems 
 
