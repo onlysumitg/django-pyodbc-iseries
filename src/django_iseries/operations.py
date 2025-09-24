@@ -26,8 +26,8 @@ from django.db import utils
 from django.db.backends.base.operations import BaseDatabaseOperations
 from django.utils import timezone
 from django.utils.functional import cached_property
-from django.utils.timezone import is_aware, utc
-
+from django.utils.timezone import is_aware
+from datetime import timezone
 from django_iseries import query
 
 dbms_name = 'dbms_name'
@@ -403,7 +403,7 @@ class DatabaseOperations(BaseDatabaseOperations):
 
         if is_aware(value):
             if settings.USE_TZ:
-                value = value.astimezone(utc).replace(tzinfo=None)
+                value = value.astimezone(timezone.utc).replace(tzinfo=None)
             else:
                 raise ValueError("Timezone aware datetime not supported")
         return str(value)
