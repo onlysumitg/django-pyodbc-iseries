@@ -427,7 +427,7 @@ class DatabaseOperations(BaseDatabaseOperations):
         values_sql = ", ".join(f'({sql})' for sql in placeholder_rows_sql)
         return f"VALUES {values_sql}"
 
-    def for_update_sql(self, nowait=False, skip_locked=False, of=()):
+    def for_update_sql(self, nowait=False, skip_locked=False, of=(), no_key=False):
         """
         Return the FOR UPDATE SQL clause to lock rows for an update operation.
         """
