@@ -126,8 +126,8 @@ class DatabaseWrapper:
         if 'dbq' in kwargs:
             liblist = kwargs.pop('dbq', [])
             libstring = ""
-            if currentschema is None:
-                currentschema = liblist[0]
+            # if currentschema is None:
+            #     currentschema = liblist[0]
             if liblist:
                 libstring = ",".join(liblist)
 
