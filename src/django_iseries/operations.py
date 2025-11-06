@@ -24,9 +24,10 @@ from functools import lru_cache
 from django.conf import settings
 from django.db import utils
 from django.db.backends.base.operations import BaseDatabaseOperations
+from datetime import timezone; utc = timezone.utc
 from django.utils import timezone
 from django.utils.functional import cached_property
-from django.utils.timezone import is_aware, utc
+from django.utils.timezone import is_aware
 
 from django_iseries import query
 
