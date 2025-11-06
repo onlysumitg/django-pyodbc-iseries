@@ -43,7 +43,11 @@ class SQLInsertCompiler(compiler.SQLInsertCompiler, SQLCompiler):
         (sql, params), *_ = super().as_sql()
         qn = self.connection.ops.quote_name
         opts = self.query.get_meta()
-        sql = f'SELECT {qn(opts.pk.column)} FROM FINAL TABLE ({sql})'
+        pk_column = qn(opts.pk.column)
+        if str(opts.pk.column).upper() == "RRN()":
+            pk_column = f"RRN({opts.db_table})"
+       
+        sql = f'SELECT {pk_column} FROM FINAL TABLE ({sql}) as {opts.db_table}'
         return [(sql, params)]
 
 

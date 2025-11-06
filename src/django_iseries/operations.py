@@ -26,8 +26,8 @@ from django.db import utils
 from django.db.backends.base.operations import BaseDatabaseOperations
 from django.utils import timezone
 from django.utils.functional import cached_property
-from django.utils.timezone import is_aware
-from datetime import timezone
+from django.utils.timezone import is_aware, utc
+
 from django_iseries import query
 
 dbms_name = 'dbms_name'
@@ -129,6 +129,8 @@ class DatabaseOperations(BaseDatabaseOperations):
         return "DATE(%s)" % field_name
 
     def field_cast_sql(self, db_type, internal_type):
+        if db_type == 'SMALLINT' and internal_type == 'BooleanField':
+            return 'coalesce((select 1 from sysibm.sysdummy1 where %s), 0)'
         return super().field_cast_sql(db_type, internal_type)
 
     # Function to extract day, month or year from the date.
@@ -403,7 +405,7 @@ class DatabaseOperations(BaseDatabaseOperations):
 
         if is_aware(value):
             if settings.USE_TZ:
-                value = value.astimezone(timezone.utc).replace(tzinfo=None)
+                value = value.astimezone(utc).replace(tzinfo=None)
             else:
                 raise ValueError("Timezone aware datetime not supported")
         return str(value)
