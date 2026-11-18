@@ -17,43 +17,18 @@
 # +--------------------------------------------------------------------------+
 
 """
-This module implements command line interface for DB2 through Django.
+Command line client support (manage.py dbshell).
 """
 
-try:
-    from django.db.backends import BaseDatabaseClient
-except ImportError:
-    from django.db.backends.base.client import BaseDatabaseClient
-
-import os
+from django.core.management.base import CommandError
+from django.db.backends.base.client import BaseDatabaseClient
 
 
 class DatabaseClient(BaseDatabaseClient):
+    executable_name = None
 
-    # Over-riding base method to provide shell support for DB2 through Django.
-    def runshell(self):
-        settings_dict = self.connection.settings_dict
-        database_name = settings_dict['NAME']
-        database_user = settings_dict['USER']
-        database_password = settings_dict['PASSWORD']
-
-        cmdArgs = ["db2"]
-
-        if (os.name == 'nt'):
-            cmdArgs += ["db2 connect to %s" % database_name]
-        else:
-            cmdArgs += ["connect to %s" % database_name]
-
-        if (isinstance(database_user, str) and
-                (database_user != '')):
-            cmdArgs += ["user %s" % database_user]
-
-            if (isinstance(database_password, str) and
-                    (database_password != '')):
-                cmdArgs += ["using %s" % database_password]
-
-        # db2cmd is the shell which is required to run db2 commands on windows.
-        if (os.name == 'nt'):
-            os.execvp('db2cmd', cmdArgs)
-        else:
-            os.execvp('db2', cmdArgs)
+    def runshell(self, parameters):
+        raise CommandError(
+            "dbshell is not supported for Db2 for i. "
+            "Use IBM i Access Client Solutions (Run SQL Scripts) or STRSQL on the system instead."
+        )

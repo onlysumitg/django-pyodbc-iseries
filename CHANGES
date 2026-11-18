@@ -1,5 +1,32 @@
 Change Log
 =============
+2026/11/17 (2.0.0)
+- Support Django 5.2 LTS, 6.0 and 6.1; Python 3.10+. Django < 5.2 is no longer supported.
+- Run tests in a separate schema (TEST['SCHEMA'], default TEST_<CURRENTSCHEMA>), created and dropped by the test runner; running tests in CURRENTSCHEMA is refused. TEST['CREATE_DB'] = False uses an existing schema.
+- Add django_iseries.fields.NVarCharField: NVARCHAR(n), where max_length counts characters.
+- Support Django's CompositePrimaryKey for all CRUD operations (tuple lookups are expanded to AND/OR).
+- Fix SQL injection and wrong values for parameters inlined into the SELECT clause.
+- Fix date/time lookups and functions, __year, union(), sql_flush, loaddata, bulk_update and GROUP BY on current Django.
+- Fix introspection of tables whose names are longer than 10 characters; report constraints in Django's format.
+- Return generated keys with SELECT ... FROM FINAL TABLE (INSERT ...) instead of IDENTITY_VAL_LOCAL(); tables with AFTER INSERT triggers use plain INSERTs.
+- Fix fetching BLOB columns hanging (MAXFIELDLEN now defaults to the driver maximum).
+- Fix RRN() primary keys: lowercase table names, joins, and new objects getting another row's record number (they now keep pk=None); record numbers are returned as int.
+- flush re-adds the foreign keys it dropped when it fails part way, instead of leaving them dropped.
+- Reject IBM i releases older than 7.3 when connecting; order_by('?') uses RAND().
+- Fix qs[n:] (OFFSET without a limit), regex lookups (REGEXP_LIKE), URLField columns (VARCHAR2).
+- Map native Db2 for i types for inspectdb: GRAPHIC/VARGRAPHIC, FOR BIT DATA, BINARY/VARBINARY, DECFLOAT, BOOLEAN, ROWID, identity columns.
+- Report constraint violations returned with SQLSTATE HY000 as IntegrityError, lock waits (SQL0913) as OperationalError and other HY000 errors as DatabaseError (they were Django's base Error); stop attaching statement parameters to errors.
+- Apply the same error mapping to fetches (SELECT ... FOR UPDATE waits for row locks while fetching, so SQL0913 was Django's base Error there), and report cancelled calls (HY008) as OperationalError.
+- Add OPTIONS['statement_timeout'] (seconds, default off): cancels any execute or fetch that runs longer, including lock waits, which the ODBC query timeout doesn't cover.
+- Drop the hardcoded XDYNAMIC=1;PKG=A/DJANGO connection attributes (library A rarely exists, so they did nothing); set them in OPTIONS to use extended dynamic SQL packages.
+- Replace sqlparse with a regex scanner: sqlparse refused statements over 10,000 tokens, so bulk_create of about 1,000+ rows failed; sqlparse is no longer a dependency.
+- Limit statements to 10,000 parameters (bulk_create batches, in_bulk; Db2 for i rejects about 32,000) and bulk_update to 250 objects per UPDATE (larger CASE expressions fail with SQL0101 and are slower).
+- Escape connection string values; apply the SSLCLIENTKEYDB setting; add OPTIONS driver and maxfieldlen.
+- Schema changes run with INQMSGRPY(*SYSRPYL) (restored afterwards), so data-loss inquiries (CPA32B2) are answered from the system reply list; a cancelled change raises OperationalError explaining the needed reply list entry.
+- Behavior changes: connections default to CMT=1 (*CS, read committed) and CONCURRENTACCESSRESOLUTION=1 (currently committed) instead of the driver's CMT=2 (*CHG), which exposed uncommitted changes to readers; connections no longer run CHGJOB INQMSGRPY(*SYSRPYL) unless OPTIONS['inquiry_message_reply'] or ['message_replies'] is set; the setting is restored when the connection closes (server jobs are reused); message_replies entries are validated and added once per process, and failures are logged on the django_iseries logger; tables are created with CREATE TABLE (not CREATE OR REPLACE TABLE); "object already exists" (42S01) errors are raised instead of ignored; migrations are no longer run in a transaction (can_rollback_ddl = False); renaming a column raises NotSupportedError; dbshell raises CommandError.
+- Replace the schema editor with Django's generic implementation plus Db2 for i syntax.
+- Packaging: single pyproject.toml (setuptools); removed setup.py and setup_org.py.
+
 2018/02/20
 -Added Support for Django2.0 ,with backward compatibility
 -Update version to 1.2.0.0

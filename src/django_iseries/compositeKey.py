@@ -3,6 +3,8 @@ This code was copied from django viewflow
 Looks like new version does not contain this class
 So, this can be used as backup
 
+Kept for existing models. It supports only exact lookups on the key; new models should use
+Django's models.CompositePrimaryKey, which this backend supports for all CRUD operations.
 """
 
 import datetime

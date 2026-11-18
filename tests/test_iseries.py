@@ -35,12 +35,25 @@ def test_quote_value(editor, value, expected):
 
 
 # noinspection PyProtectedMember
-def test_create_test_db(connection):
-    creation = DatabaseCreation(connection)
+@pytest.mark.parametrize('current_schema,test_settings,expected', [
+    ('MYLIB', {}, 'TEST_MYLIB'),
+    ('mylib', {}, 'TEST_MYLIB'),
+    ('MYLIB', {'SCHEMA': 'qa_lib'}, 'QA_LIB'),
+    ('', {'SCHEMA': 'QA_LIB'}, 'QA_LIB'),
+])
+def test_test_schema_name(connection, current_schema, test_settings, expected):
+    connection.settings_dict.update({'CURRENTSCHEMA': current_schema, 'TEST': test_settings})
+    assert DatabaseCreation(connection)._test_schema_name() == expected
+
+
+@pytest.mark.parametrize('current_schema,test_settings', [
+    ('MYLIB', {'SCHEMA': 'mylib'}),  # would run tests in the application's own schema
+    ('', {}),  # nothing to derive the test schema from
+])
+def test_test_schema_name_is_refused(connection, current_schema, test_settings):
+    connection.settings_dict.update({'CURRENTSCHEMA': current_schema, 'TEST': test_settings})
     with pytest.raises(ImproperlyConfigured):
-        # Db2 for iSeries does not support creating new databases
-        creation._create_test_db(verbosity=0, autoclobber=False, keepdb=False)
-    creation._create_test_db(verbosity=0, autoclobber=False, keepdb=True)
+        DatabaseCreation(connection)._test_schema_name()
 
 
 class DBConstraintTests:

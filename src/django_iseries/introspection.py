@@ -17,16 +17,25 @@
 # +--------------------------------------------------------------------------+
 from collections import namedtuple
 
-from . import Database
+from django.db.backends.base.introspection import BaseDatabaseIntrospection, FieldInfo as BaseFieldInfo
+from django.db.models.fields import AutoFieldMixin
 
-try:
-    from django.db.backends import BaseDatabaseIntrospection, FieldInfo as BaseFieldInfo
-except ImportError:
-    from django.db.backends.base.introspection import BaseDatabaseIntrospection, FieldInfo as BaseFieldInfo
+FieldInfo = namedtuple('FieldInfo', BaseFieldInfo._fields + ('label', 'hint', 'ccsid'))
 
-FieldInfo = namedtuple('FieldInfo', BaseFieldInfo._fields + ('label', 'hint'))
+# CCSID of binary character data (CHAR/VARCHAR FOR BIT DATA).
+BINARY_CCSID = 65535
 
-TableInfo = namedtuple('TableInfo', ['name', 'type' ,'long_name'])
+TableInfo = namedtuple('TableInfo', ['name', 'type', 'long_name'])
+
+# QSYS2.SYSTABLES.TABLE_TYPE -> Django table type ('t' table, 'v' view).
+# Physical files (P) are tables; logical files (L), aliases (A) and materialized query tables (M)
+# are reported as views so Django never tries to manage them as tables.
+TABLE_TYPES = {'T': 't', 'P': 't', 'V': 'v', 'L': 'v', 'A': 'v', 'M': 'v'}
+
+# Tables are looked up by their SQL name. Tables with names longer than 10 characters also get a
+# generated system name (for example DJANGO_CONTENT_TYPE -> DJANG00001); that name is accepted too,
+# so models whose db_table holds a system name keep working.
+SYSTEM_NAME_MAX_LENGTH = 10
 
 
 class DatabaseIntrospection(BaseDatabaseIntrospection):
@@ -34,242 +43,243 @@ class DatabaseIntrospection(BaseDatabaseIntrospection):
     This is the class where database metadata information can be generated.
     """
 
+    # QSYS2.SYSCOLUMNS.DATA_TYPE -> Django field. REAL, DOUBLE and FLOAT all report as FLOAT;
+    # NCHAR/NVARCHAR/NCLOB report as GRAPHIC/VARG/DBCLOB.
     data_types_reverse = {
-        'VARCHAR': 'CharField',
         'CHAR': 'CharField',
-        'DATE': 'DateField',
-        'TIMESTAMP': 'DateTimeField',
-        'TIMESTMP': 'DateTimeField',
-        'DECIMAL': 'DecimalField',
-        'DOUBLE': 'FloatField',
-        'FLOAT': 'FloatField',
-        'DECFLOAT': 'FloatField',
-        'INTEGER': 'IntegerField',
-        'BIGINT': 'BigIntegerField',
-        'SMALLINT': 'SmallIntegerField',
+        'VARCHAR': 'CharField',
+        'GRAPHIC': 'CharField',
+        'VARG': 'CharField',
+        'DATALINK': 'CharField',
         'CLOB': 'TextField',
-        'TIME': 'TimeField',
+        'DBCLOB': 'TextField',
         'XML': 'TextField',
         'BLOB': 'BinaryField',
-        'BINARY': 'IntegerField',
+        'BINARY': 'BinaryField',
         'VARBIN': 'BinaryField',
-        'ROWID': 'BigIntegerField',
+        'ROWID': 'BinaryField',
+        'SMALLINT': 'SmallIntegerField',
+        'INTEGER': 'IntegerField',
+        'BIGINT': 'BigIntegerField',
+        'DECIMAL': 'DecimalField',
         'NUMERIC': 'DecimalField',
-        'DBCLOB': 'TextField',
-        'GRAPHIC': 'TextField',
+        'DECFLOAT': 'DecimalField',
+        'FLOAT': 'FloatField',
+        'DOUBLE': 'FloatField',
+        'REAL': 'FloatField',
+        'DATE': 'DateField',
+        'TIME': 'TimeField',
+        'TIMESTMP': 'DateTimeField',
+        'TIMESTAMP': 'DateTimeField',
+        'BOOLEAN': 'BooleanField',
+    }
+
+    identity_field_types = {
+        'SMALLINT': 'SmallAutoField',
+        'INTEGER': 'AutoField',
+        'BIGINT': 'BigAutoField',
     }
 
     def get_field_type(self, data_type, description):
-        return super(DatabaseIntrospection, self).get_field_type(data_type, description)
+        # CHAR/VARCHAR FOR BIT DATA (CCSID 65535) hold bytes, not text.
+        if data_type in ('CHAR', 'VARCHAR') and description.ccsid == BINARY_CCSID:
+            return 'BinaryField'
+        # Identity columns are reported with a default starting with '**' (see get_table_description).
+        if description.default and description.default.startswith('**') and data_type in self.identity_field_types:
+            return self.identity_field_types[data_type]
+        return super().get_field_type(data_type, description)
+
+    def identifier_converter(self, name):
+        return name.strip().lower()
+
+    def _resolve_table(self, cursor, table_name):
+        """
+        Return (schema, table) holding the given table's data: an alias resolves to its base table.
+        Raises ValueError if the table does not exist in the current schema.
+        """
+        schema = cursor.get_current_schema()
+        table_name = table_name.upper()
+        sql = ("SELECT TABLE_NAME, TABLE_TYPE, BASE_TABLE_SCHEMA, BASE_TABLE_NAME FROM QSYS2.SYSTABLES "
+               "WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s")
+        params = [schema, table_name]
+        if len(table_name) <= SYSTEM_NAME_MAX_LENGTH:
+            # A longer value can't be a system name, and the driver rejects it for the CHAR(10) column.
+            sql = sql.replace("TABLE_NAME = %s", "(TABLE_NAME = %s OR SYSTEM_TABLE_NAME = %s)")
+            params.append(table_name)
+        cursor.execute(sql, params)
+        row = cursor.fetchone()
+        if row is None:
+            raise ValueError(f"Table {table_name} does not exist in schema {schema}")
+        name, table_type, base_schema, base_name = row
+        if table_type == 'A' and base_name:
+            return base_schema.strip(), base_name.strip()
+        return schema, name.strip()
 
     # Getting the list of all tables, which are present under current schema.
     def get_table_list(self, cursor):
         schema = cursor.get_current_schema()
-        table_query = """SELECT SYSTEM_TABLE_NAME, LOWER(TABLE_TYPE) ,TABLE_NAME
-                          FROM QSYS2.SYSTABLES 
-                         WHERE SYSTEM_TABLE_SCHEMA = ? """
-
-        tables = cursor.execute(table_query, [schema, ])
-
-        return [TableInfo(self.identifier_converter(t_name), t_type , self.identifier_converter(t_long_name)) for t_name, t_type,t_long_name in tables]
-
-    # Generating a dictionary for foreign key details, which are present under current schema.
-    def get_relations(self, cursor, table_name):
-        relations = {}
-        schema = cursor.get_current_schema()
-        foreign_keys = []
-        try:
-            foreign_keys = list(cursor.foreignKeys(foreignTable=table_name.upper(), schema=schema))
-        except Exception as e:
-            pass
-            #print("exception in get_relations >>> " ,e)
-        for fk in foreign_keys:
-            relations[self.identifier_converter(fk.fkcolumn_name)] = (
-                self.identifier_converter(fk.pkcolumn_name),
-                self.identifier_converter(fk.pktable_name),
-
-            )
-        return relations
-
-    def get_key_columns(self, cursor, table_name):
-        relations = []
-        schema = cursor.get_current_schema()
-        foreign_keys = list(cursor.foreignKeys(table=table_name.upper(), schema=schema))
-        for fk in foreign_keys:
-            relations.append((self.identifier_converter(fk.fkcolumn_name),
-                              self.identifier_converter(fk.pktable_name),
-                              self.identifier_converter(fk.pkcolumn_name)))
-        return relations
+        cursor.execute("SELECT TABLE_NAME, TABLE_TYPE FROM QSYS2.SYSTABLES WHERE TABLE_SCHEMA = %s", [schema])
+        return [
+            TableInfo(self.identifier_converter(name), TABLE_TYPES.get(table_type, 'v'), self.identifier_converter(name))
+            for name, table_type in cursor.fetchall()
+        ]
 
     # Getting the description of the table.
     def get_table_description(self, cursor, table_name):
-        qn = self.connection.ops.quote_name
-        description = []
-        schema = cursor.get_current_schema()
-        sql = """SELECT TYPE 
-                   FROM QSYS2.SYSTABLES 
-                  WHERE SYSTEM_TABLE_SCHEMA=? 
-                    AND SYSTEM_TABLE_NAME=?"""
-        cursor.execute(sql, [schema,table_name.upper()])
-        table_type = cursor.fetchone()[0]
-
-        schema = cursor.get_current_schema()
-        if table_type == 'A':  # alias
-            sql = """SELECT BASENAME, BASESCHEMA
-                       FROM TABLE( SYSPROC.BASE_TABLE( ?, ? ) ) AS X"""
-            cursor.execute(sql, [schema,table_name.upper()])
-            table_name, schema = cursor.fetchone()
-
-        if table_type != 'X':
-            # sql = """SELECT TRIM( COLUMN_NAME ) AS COLUMN_NAME
-            #               , TRIM( DATA_TYPE )   AS DATA_TYPE
-            #               , LENGTH              AS DISPLAY_SIZE
-            #               , STORAGE             AS INTERNAL_SIZE
-            #               , NUMERIC_PRECISION
-            #               , NUMERIC_SCALE
-            #               , CASE IS_NULLABLE WHEN 'Y' THEN 1 ELSE 0 END AS IS_NULLABLE
-            #          FROM QSYS2.SYSCOLUMNS C
-            #          WHERE SYSTEM_TABLE_NAME = ?
-            #            AND TABLE_SCHEMA = COALESCE(?, CURRENT_SCHEMA)
-            #          ORDER BY ORDINAL_POSITION"""
-
-            sql = """ SELECT
-                    name AS COLUMN_NAME ,
-                    TRIM( DATA_TYPE )   AS DATA_TYPE,
-                    LENGTH,
-                    STORAGE,
-                    NUMERIC_PRECISION,
-                    NUMERIC_SCALE,
-                    CASE IS_NULLABLE WHEN 'Y' THEN 1 ELSE 0 END AS IS_NULLABLE,
-                    HAS_DEFAULT,
-                    case when IDENTITY_GENERATION IS NULL then COLUMN_DEFAULT else concat('**',ifnull(COLUMN_DEFAULT,'')) end as COLUMN_DEFAULT,
-                    ifnull(COLUMN_HEADING,'') as COLUMN_HEADING,
-                    ifnull(COLUMN_TEXT,'') as COLUMN_TEXT
-                       FROM QSYS2.SYSCOLUMNS C
-                     WHERE SYSTEM_TABLE_NAME = ?
-                       AND SYSTEM_TABLE_SCHEMA = ?
-                     ORDER BY ORDINAL_POSITION                  
-                    """
-            current_schema = cursor.get_current_schema()
-            if schema is not None:
-                current_schema = schema
-
-            column_descriptions = cursor.execute(sql, [table_name.upper(),  current_schema,])
-
-            """
-            # Structure returned by the DB-API cursor.description interface (PEP 249)
-            FieldInfo = namedtuple(
-                'FieldInfo',
-                'name       
-                type_code       DATA_TYPE    
-                display_size    LENGTH      
-                internal_size   STORAGE    
-                precision       NUMERIC_PRECISION
-                scale          NUMERIC_SCALE
-                null_ok         IS_NULLABLE  
-                default          COLUMN_DEFAULT     HAS_DEFAULT->   https://www.ibm.com/docs/en/i/7.3?topic=views-syscolumns 
-                collation '
-                label,
-                hint
-                                                
+        schema, table_name = self._resolve_table(cursor, table_name)
+        cursor.execute(
+            """SELECT COLUMN_NAME,
+                      TRIM(DATA_TYPE),
+                      LENGTH,
+                      STORAGE,
+                      NUMERIC_PRECISION,
+                      NUMERIC_SCALE,
+                      CASE IS_NULLABLE WHEN 'Y' THEN 1 ELSE 0 END,
+                      CASE WHEN IDENTITY_GENERATION IS NULL THEN COLUMN_DEFAULT
+                           ELSE CONCAT('**', IFNULL(COLUMN_DEFAULT, '')) END,
+                      IFNULL(COLUMN_HEADING, ''),
+                      IFNULL(COLUMN_TEXT, ''),
+                      CCSID
+                 FROM QSYS2.SYSCOLUMNS
+                WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s
+                ORDER BY ORDINAL_POSITION""",
+            [schema, table_name],
+        )
+        return [
+            FieldInfo(
+                self.identifier_converter(name),
+                data_type,
+                length,
+                storage,
+                precision,
+                scale,
+                is_nullable == 1,
+                default.replace("'", "") if default else None,
+                None,
+                ' '.join(heading.split()),
+                ' '.join(text.split()),
+                ccsid,
             )
-            
-            class Field(object):
-                def __init__(self, verbose_name=None, name=None, primary_key=False,
-                    max_length=None, unique=False, blank=False, null=False,
-                    db_index=False, rel=None, default=NOT_PROVIDED, editable=True,
-                    serialize=True, unique_for_date=None, unique_for_month=None,
-                    unique_for_year=None, choices=None, help_text='', db_column=None,
-                    db_tablespace=None, auto_created=False, validators=[],
-                    error_messages=None):
-            
-            """
+            for name, data_type, length, storage, precision, scale, is_nullable, default, heading, text, ccsid
+            in cursor.fetchall()
+        ]
 
-            for desc in column_descriptions:
-                description.append(FieldInfo(
-                    self.identifier_converter(desc.COLUMN_NAME),
-                    desc.DATA_TYPE,
-                    desc.LENGTH,
-                    desc.STORAGE,
-                    desc.NUMERIC_PRECISION,
-                    desc.NUMERIC_SCALE,
-                    True if desc.IS_NULLABLE == 1 else False,
-                    desc.COLUMN_DEFAULT.replace("'", "") if desc.COLUMN_DEFAULT else None,
-
-                    None,
-                    ' '.join(x for x in desc.COLUMN_HEADING.split(' ') if x.strip()) ,
-                    ' '.join(x for x in desc.COLUMN_TEXT.split(' ') if x.strip())
-
-                ))
-        return description
+    def get_relations(self, cursor, table_name):
+        """Return {field_column: (referenced_column, referenced_table)} for foreign keys on the table."""
+        schema, table_name = self._resolve_table(cursor, table_name)
+        cursor.execute(
+            """SELECT FKC.COLUMN_NAME, PKC.COLUMN_NAME, PK.TABLE_NAME
+                 FROM QSYS2.SYSREFCST REF
+                 JOIN QSYS2.SYSCST FK
+                   ON FK.CONSTRAINT_SCHEMA = REF.CONSTRAINT_SCHEMA AND FK.CONSTRAINT_NAME = REF.CONSTRAINT_NAME
+                 JOIN QSYS2.SYSCST PK
+                   ON PK.CONSTRAINT_SCHEMA = REF.UNIQUE_CONSTRAINT_SCHEMA
+                  AND PK.CONSTRAINT_NAME = REF.UNIQUE_CONSTRAINT_NAME
+                 JOIN QSYS2.SYSKEYCST FKC
+                   ON FKC.CONSTRAINT_SCHEMA = FK.CONSTRAINT_SCHEMA AND FKC.CONSTRAINT_NAME = FK.CONSTRAINT_NAME
+                 JOIN QSYS2.SYSKEYCST PKC
+                   ON PKC.CONSTRAINT_SCHEMA = PK.CONSTRAINT_SCHEMA AND PKC.CONSTRAINT_NAME = PK.CONSTRAINT_NAME
+                  AND PKC.ORDINAL_POSITION = FKC.ORDINAL_POSITION
+                WHERE FK.TABLE_SCHEMA = %s AND FK.TABLE_NAME = %s""",
+            [schema, table_name],
+        )
+        return {
+            self.identifier_converter(column): (self.identifier_converter(referenced_column),
+                                                self.identifier_converter(referenced_table))
+            for column, referenced_column, referenced_table in cursor.fetchall()
+        }
 
     def get_constraints(self, cursor, table_name):
-
+        schema, table_name = self._resolve_table(cursor, table_name)
         constraints = {}
-        schema = cursor.get_current_schema()
-        sql = """SELECT TYPE 
-                   FROM QSYS2.SYSTABLES 
-                  WHERE SYSTEM_TABLE_SCHEMA=? 
-                    AND SYSTEM_TABLE_NAME=?"""
-        c1 = cursor.execute(sql, [schema, table_name.upper(),])
 
-        table_type = cursor.fetchone()[0]
-
-        schema = cursor.get_current_schema()
-        if table_type == 'A':  # alias
-            sql = """SELECT BASENAME, BASESCHEMA
-                       FROM TABLE( SYSPROC.BASE_TABLE( ?, ? ) ) AS X"""
-            cursor.execute(sql, [schema,table_name.upper(),])
-            table_name, schema = cursor.fetchone()
-
-        sql = """SELECT CST.CONSTRAINT_NAME
-                     , COLUMN_NAME
-                     , CASE CONSTRAINT_TYPE WHEN 'PRIMARY KEY' THEN 1 ELSE 0 END AS IS_PRIMARY
-                     , CASE CONSTRAINT_TYPE WHEN 'UNIQUE' THEN 1 ELSE 0 END      AS IS_UNIQUE
-                     , CASE CONSTRAINT_TYPE WHEN 'FOREIGN KEY' THEN 1 ELSE 0 END AS IS_FOREIGN
-                     , CASE CONSTRAINT_TYPE WHEN 'CHECK' THEN 1 ELSE 0 END       AS IS_CHECK
-                FROM QSYS2.SYSCST CST
-                         JOIN QSYS2.SYSCSTCOL CSTCOL
-                              ON ( CST.CONSTRAINT_NAME, CST.CONSTRAINT_SCHEMA ) = ( CSTCOL.CONSTRAINT_NAME, CSTCOL.CONSTRAINT_SCHEMA)
-                WHERE CST.SYSTEM_TABLE_NAME = ? and CST.SYSTEM_TABLE_SCHEMA = ?"""
-        cursor.execute(sql, [table_name.upper(),schema,])
-        for constraint_name, column_name, is_primary, is_unique, is_foreign, is_check in cursor.fetchall():
-            constraints.setdefault(self.identifier_converter(constraint_name), {
+        # Primary keys, unique constraints and foreign keys, with columns in key order.
+        cursor.execute(
+            """SELECT CST.CONSTRAINT_NAME, CST.CONSTRAINT_TYPE, K.COLUMN_NAME, PK.TABLE_NAME, PKC.COLUMN_NAME
+                 FROM QSYS2.SYSCST CST
+                 JOIN QSYS2.SYSKEYCST K
+                   ON K.CONSTRAINT_SCHEMA = CST.CONSTRAINT_SCHEMA AND K.CONSTRAINT_NAME = CST.CONSTRAINT_NAME
+                 LEFT JOIN QSYS2.SYSREFCST REF
+                   ON REF.CONSTRAINT_SCHEMA = CST.CONSTRAINT_SCHEMA AND REF.CONSTRAINT_NAME = CST.CONSTRAINT_NAME
+                 LEFT JOIN QSYS2.SYSCST PK
+                   ON PK.CONSTRAINT_SCHEMA = REF.UNIQUE_CONSTRAINT_SCHEMA
+                  AND PK.CONSTRAINT_NAME = REF.UNIQUE_CONSTRAINT_NAME
+                 LEFT JOIN QSYS2.SYSKEYCST PKC
+                   ON PKC.CONSTRAINT_SCHEMA = PK.CONSTRAINT_SCHEMA AND PKC.CONSTRAINT_NAME = PK.CONSTRAINT_NAME
+                  AND PKC.ORDINAL_POSITION = K.ORDINAL_POSITION
+                WHERE CST.TABLE_SCHEMA = %s AND CST.TABLE_NAME = %s
+                ORDER BY CST.CONSTRAINT_NAME, K.ORDINAL_POSITION""",
+            [schema, table_name],
+        )
+        for name, constraint_type, column, referenced_table, referenced_column in cursor.fetchall():
+            constraint = constraints.setdefault(self.identifier_converter(name), {
                 'columns': [],
-                'primary_key': is_primary,
-                'unique': is_unique,
-                'foreign_key': is_foreign,
-                'check': is_check,
-                'index': False
-            })['columns'].append(self.identifier_converter(column_name))
+                'primary_key': constraint_type == 'PRIMARY KEY',
+                'unique': constraint_type in ('PRIMARY KEY', 'UNIQUE'),
+                'foreign_key': (
+                    (self.identifier_converter(referenced_table), self.identifier_converter(referenced_column))
+                    if constraint_type == 'FOREIGN KEY' else None
+                ),
+                'check': False,
+                'index': False,
+            })
+            constraint['columns'].append(self.identifier_converter(column))
 
-        sql = """SELECT IDX.INDEX_NAME, K.COLUMN_NAME, CASE IDX.IS_UNIQUE WHEN 'D' THEN 0 ELSE 1 END AS IS_UNIQUE 
-                 FROM QSYS2.SYSINDEXES IDX 
-                 JOIN QSYS2.SYSKEYS K ON ( IDX.INDEX_NAME, IDX.INDEX_SCHEMA ) = ( K.INDEX_NAME, K.INDEX_SCHEMA ) 
-                WHERE SYSTEM_TABLE_NAME = ? 
-                  AND SYSTEM_TABLE_SCHEMA = ? 
-               ORDER BY IDX.INDEX_NAME, K.ORDINAL_POSITION """
-        indexes = cursor.execute(sql, [table_name.upper(),schema])
-        for index_name, column_name, is_unique in indexes.fetchall():
-            constraints.setdefault(self.identifier_converter(index_name), {
+        # Check constraints.
+        cursor.execute(
+            """SELECT CST.CONSTRAINT_NAME, COL.COLUMN_NAME
+                 FROM QSYS2.SYSCST CST
+                 JOIN QSYS2.SYSCSTCOL COL
+                   ON COL.CONSTRAINT_SCHEMA = CST.CONSTRAINT_SCHEMA AND COL.CONSTRAINT_NAME = CST.CONSTRAINT_NAME
+                WHERE CST.TABLE_SCHEMA = %s AND CST.TABLE_NAME = %s AND CST.CONSTRAINT_TYPE = 'CHECK'
+                ORDER BY CST.CONSTRAINT_NAME, COL.COLUMN_NAME""",
+            [schema, table_name],
+        )
+        for name, column in cursor.fetchall():
+            constraints.setdefault(self.identifier_converter(name), {
                 'columns': [],
                 'primary_key': False,
-                'unique': is_unique,
+                'unique': False,
+                'foreign_key': None,
+                'check': True,
+                'index': False,
+            })['columns'].append(self.identifier_converter(column))
+
+        # Indexes.
+        cursor.execute(
+            """SELECT IDX.INDEX_NAME, K.COLUMN_NAME, IDX.IS_UNIQUE, K.ORDERING
+                 FROM QSYS2.SYSINDEXES IDX
+                 JOIN QSYS2.SYSKEYS K
+                   ON K.INDEX_SCHEMA = IDX.INDEX_SCHEMA AND K.INDEX_NAME = IDX.INDEX_NAME
+                WHERE IDX.TABLE_SCHEMA = %s AND IDX.TABLE_NAME = %s
+                ORDER BY IDX.INDEX_NAME, K.ORDINAL_POSITION""",
+            [schema, table_name],
+        )
+        for name, column, is_unique, ordering in cursor.fetchall():
+            index = constraints.setdefault(self.identifier_converter(name), {
+                'columns': [],
+                'orders': [],
+                'primary_key': False,
+                # 'D' allows duplicate keys; 'U' and 'V' (unique where not null) are unique.
+                'unique': is_unique in ('U', 'V'),
                 'foreign_key': None,
                 'check': False,
                 'index': True,
-            })['columns'].append(self.identifier_converter(column_name))
+                'type': 'idx',
+            })
+            index['columns'].append(self.identifier_converter(column))
+            index['orders'].append('DESC' if ordering == 'D' else 'ASC')
         return constraints
 
-    def get_sequences(self, cursor, table_name, table_fields = ()):
-        from django.db import models
-
-        seq_list = []
-        for f in table_fields:
-            if (isinstance(f, models.AutoField)):
-                seq_list.append({'table': table_name.upper(), 'column': f.column})
-                break
-        return seq_list
-
-    def identifier_converter(self, name):
-        return name.lower()
+    def get_sequences(self, cursor, table_name, table_fields=()):
+        for field in table_fields:
+            if isinstance(field, AutoFieldMixin):
+                return [{'table': table_name, 'column': field.column}]
+        # No model field given: fall back to the table's identity column, if any.
+        schema, resolved_table = self._resolve_table(cursor, table_name)
+        cursor.execute(
+            "SELECT COLUMN_NAME FROM QSYS2.SYSCOLUMNS WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s "
+            "AND IS_IDENTITY = 'YES'",
+            [schema, resolved_table],
+        )
+        return [{'table': table_name, 'column': self.identifier_converter(column)} for (column,) in cursor.fetchall()]

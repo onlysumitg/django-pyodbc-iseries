@@ -34,20 +34,30 @@ from django_iseries.creation import DatabaseCreation
 from django_iseries.introspection import DatabaseIntrospection
 from django_iseries.operations import DatabaseOperations
 from django_iseries.schemaEditor import DB2SchemaEditor
+from django_iseries import functions
 from . import Database
 
 dbms_name = 'dbname'
 
+functions.register()
+
 
 class DatabaseFeatures(BaseDatabaseFeatures):
-    allows_group_by_pk = False
     allows_group_by_selected_pks = False
+    # Db2 for i doesn't accept GROUP BY <select list position>.
+    allows_group_by_select_index = False
+    # Untyped parameter markers aren't allowed as CASE results (SQL0580), so bulk_update casts them.
+    requires_casted_case_in_updates = True
 
     interprets_empty_strings_as_nulls = False
 
     can_use_chunked_reads = True
-    can_return_id_from_insert = True
-    can_return_ids_from_bulk_insert = True
+    # Generated values are returned with SELECT ... FROM FINAL TABLE (INSERT ...); see compiler.py.
+    can_return_columns_from_insert = True
+    can_return_rows_from_bulk_insert = True
+    has_bulk_insert = True
+    # Db2 for i rejects statements with about 32,000 parameter markers (SQL0101, SQL0901); stay well below.
+    max_query_params = 10000
     uses_savepoints = True
     can_release_savepoints = True
 
@@ -56,48 +66,45 @@ class DatabaseFeatures(BaseDatabaseFeatures):
     has_select_for_update_skip_locked = True
     has_select_for_update_of = True
     select_for_update_of_column = True
+    supports_select_for_update_with_limit = False
 
     test_db_allows_multiple_connections = False
 
     supports_unspecified_pk = True
 
-    supports_forward_references = False  # ??
-
-    # Custom query class has been implemented
-    # django.db.backends.db2.query.query_class.DB2QueryClass
-    uses_custom_query_class = True
+    supports_forward_references = False
 
     # transaction is supported by DB2
     supports_transactions = True
 
-    uppercases_column_names = True
     allows_auto_pk_0 = True
     can_defer_constraint_checks = False
-    requires_rollback_on_dirty_transaction = True
     supports_regex_backreferencing = True
     supports_timezones = False
-    has_bulk_insert = True
 
-    supports_long_model_names = False
-    can_distinct_on_fields = False
     supports_paramstyle_pyformat = False
     supports_sequence_reset = True
     # DB2 doesn't take default values as parameter
     requires_literal_defaults = True
-    can_introspect_big_integer_field = True
-    can_introspect_boolean_field = False
-    can_introspect_positive_integer_field = False
-    can_introspect_small_integer_field = True
-    can_introspect_null = True
-    can_introspect_ip_address_field = False
-    can_introspect_time_field = True
-    can_rollback_ddl = True
+    # Db2 for i rejects DDL on a table changed earlier in the same transaction (SQL0910), and Django's
+    # schema changes mix the two (for example, filling NULLs before SET NOT NULL). Migrations are
+    # therefore not wrapped in a transaction; each statement commits on its own.
+    can_rollback_ddl = False
     has_case_insensitive_like = False
     bare_select_suffix = ' FROM SYSIBM.SYSDUMMY1'
     implied_column_null = True
-    supports_select_for_update_with_limit = False
     ignores_table_name_case = True
     supports_over_clause = True
+
+    # Oldest IBM i release the backend's SQL (TRUNC_TIMESTAMP, REGEXP_LIKE, OFFSET ... ROWS) is written for.
+    minimum_database_version = (7, 3)
+
+    # Db2 for i rejects "(a, b) IN ((?, ?), ...)" and "(a, b) > (?, ?)", so Django expands tuple
+    # lookups (used by composite primary keys) into AND/OR conditions.
+    supports_tuple_lookups = False
+
+    # There is no JSON column type mapping.
+    supports_json_field = False
 
     create_test_procedure_without_params_sql = None
     create_test_procedure_with_int_param_sql = None
@@ -159,24 +166,11 @@ class DatabaseWrapper(BaseDatabaseWrapper):
 
     error_codes_remap_to_database_error = ['28000']
 
-    # Constructor of DB2 backend support. Initializing all other classes.
-    def __init__(self, *args):
-        super(DatabaseWrapper, self).__init__(*args)
-        self.ops = DatabaseOperations(self)
-        self.client = DatabaseClient(self)
-        self.features = DatabaseFeatures(self)
-        self.creation = DatabaseCreation(self)
-
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self.data_types = self.creation.data_types
         self.data_type_check_constraints = self.creation.data_type_check_constraints
-
-        self.introspection = DatabaseIntrospection(self)
-        self.validation = DatabaseValidation(self)
         self.databaseWrapper = PyBaseDatabaseWrapper()
-
-    # Method to check if connection is live or not.
-    def __is_connection(self):
-        return self.connection is not None
 
     # To get dict of connection parameters 
     def get_connection_params(self):
@@ -258,9 +252,6 @@ class DatabaseWrapper(BaseDatabaseWrapper):
     def create_cursor(self, name=None):
         return self.databaseWrapper._cursor(self.connection)
 
-    def init_connection_state(self):
-        pass
-
     def is_usable(self):
         if self.databaseWrapper.is_active(self.connection):
             return True
@@ -281,13 +272,12 @@ class DatabaseWrapper(BaseDatabaseWrapper):
             self.cursor()
         return self.databaseWrapper.get_server_version(self.connection)
 
+    def get_database_version(self):
+        # IBM i release as (version, release), e.g. (7, 5); checked against minimum_database_version.
+        return self.get_server_version()[:2]
+
     def schema_editor(self, *args, **kwargs):
         return DB2SchemaEditor(self, *args, **kwargs)
-
-    def disable_constraint_checking(self):
-        raise utils.NotSupportedError(
-            "Db2 for iSeries currently supports no method of disabling constraints on a per-session basis."
-        )
 
     def connect(self):
         try:

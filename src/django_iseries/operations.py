@@ -17,65 +17,118 @@
 # | Hemlata Bhatt, Vyshakh A                                                 |
 # +--------------------------------------------------------------------------+
 
-import datetime
+import decimal
 import uuid
-from functools import lru_cache
+from collections import namedtuple
 
 from django.conf import settings
-from django.db import utils
+from django.db import NotSupportedError, utils
 from django.db.backends.base.operations import BaseDatabaseOperations
-from datetime import timezone; utc = timezone.utc
+from django.db.models.fields import AutoFieldMixin
 from django.utils import timezone
-from django.utils.functional import cached_property
-from django.utils.timezone import is_aware
 
-from django_iseries import query
+# Django lookup name -> Db2 for i function returning that part of a date or timestamp.
+# DAYOFWEEK counts Sunday as 1, which is what Django's week_day lookup expects.
+EXTRACT_FUNCTIONS = {
+    'year': 'YEAR',
+    'quarter': 'QUARTER',
+    'month': 'MONTH',
+    'week': 'WEEK_ISO',
+    'day': 'DAY',
+    'week_day': 'DAYOFWEEK',
+    'iso_week_day': 'DAYOFWEEK_ISO',
+    'hour': 'HOUR',
+    'minute': 'MINUTE',
+    'second': 'SECOND',
+}
 
-dbms_name = 'dbms_name'
+# Django truncation kind -> TRUNC_TIMESTAMP format ('IW' truncates to the ISO week's Monday).
+TRUNC_FORMATS = {
+    'year': 'YYYY',
+    'quarter': 'Q',
+    'month': 'MM',
+    'week': 'IW',
+    'day': 'DD',
+    'hour': 'HH',
+    'minute': 'MI',
+    'second': 'SS',
+}
+
+# Objects per UPDATE in bulk_update(): measured fastest on IBM i 7.5, and far below the CASE size limit.
+BULK_UPDATE_BATCH_SIZE = 250
+
+ForeignKeyConstraint = namedtuple(
+    'ForeignKeyConstraint',
+    'referencing_table name referencing_columns referenced_table referenced_columns delete_rule update_rule',
+)
 
 
 class DatabaseOperations(BaseDatabaseOperations):
-    def __init__(self, connection):
-        super(DatabaseOperations, self).__init__(self)
-        self.connection = connection
-
     compiler_module = "django_iseries.compiler"
 
-    def cache_key_culling_sql(self):
-        return '''select cache_key 
-                    from (select cache_key, ( ROW_NUMBER() over() ) as rownum from %s order by cache_key)
-                    where rownum = %%s + 1
-        '''
+    # CAST targets for fields whose creation type can't be used in a CAST (identity clauses).
+    cast_data_types = {
+        'AutoField': 'INTEGER',
+        'BigAutoField': 'BIGINT',
+        'SmallAutoField': 'SMALLINT',
+    }
+    cast_char_field_without_max_length = 'VARCHAR(32000) CCSID 1208'
 
-    def check_aggregate_support(self, aggregate):
-        # In DB2 data type of the result is the same as the data type of the argument values for AVG aggregation
-        # But Django aspect in Float regardless of data types of argument value
-        # http://publib.boulder.ibm.com/infocenter/db2luw/v9r7/index.jsp?topic=/com.ibm.db2.luw.apdv.cli.doc/doc/c0007645.html
-        if aggregate.sql_function == 'AVG':
-            aggregate.sql_template = '%(function)s(DOUBLE(%(field)s))'
-        # In DB2 equivalent sql function of STDDEV_POP is STDDEV
-        elif aggregate.sql_function == 'STDDEV_POP':
-            aggregate.sql_function = 'STDDEV'
-        # In DB2 equivalent sql function of VAR_SAMP is VARIENCE
-        elif aggregate.sql_function == 'VAR_POP':
-            aggregate.sql_function = 'VARIANCE'
-        # DB2 doesn't have sample standard deviation function
-        elif aggregate.sql_function == 'STDDEV_SAMP':
-            raise NotImplementedError("sample standard deviation function not supported")
-        # DB2 doesn't have sample variance function
-        elif aggregate.sql_function == 'VAR_SAMP':
-            raise NotImplementedError("sample variance function not supported")
+    def __init__(self, connection):
+        super().__init__(connection)
+        self._after_insert_trigger_cache = {}
 
     def get_db_converters(self, expression):
-        """
-        Get a list of functions needed to convert field data.
-        """
-        converters = super(DatabaseOperations, self).get_db_converters(expression)
-
+        converters = super().get_db_converters(expression)
         internal_type = expression.output_field.get_internal_type()
-        if internal_type == 'UUIDField':
+        if internal_type in ('AutoField', 'BigAutoField', 'SmallAutoField'):
+            converters.append(self.convert_autofield_value)
+        elif internal_type == 'BooleanField':
+            converters.append(self.convert_booleanfield_value)
+        elif internal_type == 'UUIDField':
             converters.append(self.convert_uuidfield_value)
+        elif internal_type == 'DecimalField':
+            converters.append(self.convert_decimalfield_value)
+        elif internal_type == 'FloatField':
+            converters.append(self.convert_floatfield_value)
+        elif internal_type == 'DateTimeField' and settings.USE_TZ:
+            converters.append(self.convert_datetimefield_value)
         return converters
+
+    def convert_autofield_value(self, value, expression, connection):
+        # Record numbers (RRN()) are returned as DECIMAL.
+        if isinstance(value, decimal.Decimal):
+            return int(value)
+        return value
+
+    def convert_booleanfield_value(self, value, expression, connection):
+        # Booleans are stored as SMALLINT 0/1.
+        if value in (0, 1):
+            return bool(value)
+        return value
+
+    def convert_decimalfield_value(self, value, expression, connection):
+        # pyodbc returns DECFLOAT columns as strings.
+        if isinstance(value, str):
+            return decimal.Decimal(value)
+        return value
+
+    def convert_floatfield_value(self, value, expression, connection):
+        # pyodbc returns DECFLOAT columns as strings.
+        if isinstance(value, str):
+            return float(value)
+        return value
+
+    def convert_uuidfield_value(self, value, expression, connection):
+        if value is not None:
+            value = uuid.UUID(value)
+        return value
+
+    def convert_datetimefield_value(self, value, expression, connection):
+        # Timestamps are stored naive, in the connection's time zone (see adapt_datetimefield_value).
+        if value is not None:
+            value = timezone.make_aware(value, self.connection.timezone)
+        return value
 
     def combine_duration_expression(self, connector, sub_expressions):
         if 'NULL' in sub_expressions:
@@ -115,38 +168,76 @@ class DatabaseOperations(BaseDatabaseOperations):
             return f'POWER(CAST({lhs} AS FLOAT), CAST({rhs} AS FLOAT))'
         return super().combine_expression(connector, sub_expressions)
 
-    def convert_uuidfield_value(self, value, expression, connection):
-        if value is not None:
-            value = uuid.UUID(value)
-        return value
-
     def format_for_duration_arithmetic(self, sql):
         if sql == 'NULL':
             return sql
         return 'CAST(%s AS BIGINT) MICROSECONDS' % sql
 
-    def datetime_cast_date_sql(self, field_name, tzname):
-        field_name = self._convert_field_to_tz(field_name, tzname)
-        return "DATE(%s)" % field_name
+    def date_interval_sql(self, timedelta):
+        return "%d DAYS + %d SECONDS + %d MICROSECONDS" % (
+            timedelta.days, timedelta.seconds, timedelta.microseconds)
 
-    def field_cast_sql(self, db_type, internal_type):
-        if db_type == 'SMALLINT' and internal_type == 'BooleanField':
-            return 'coalesce((select 1 from sysibm.sysdummy1 where %s), 0)'
-        return super().field_cast_sql(db_type, internal_type)
+    # Date and time functions. Each takes the column SQL and its params and returns (sql, params).
 
-    # Function to extract day, month or year from the date.
-    # Reference: http://publib.boulder.ibm.com/infocenter/db2luw/v9r5/topic/com.ibm.db2.luw.sql.ref.doc/doc/r0023457.html
-    def date_extract_sql(self, lookup_type, field_name):
-        if lookup_type.upper() == 'WEEK_DAY':
-            return " DAYOFWEEK(%s) " % (field_name)
-        else:
-            return " %s(%s) " % (lookup_type.upper(), field_name)
+    def _convert_sql_to_tz(self, sql, params, tzname):
+        """
+        Db2 for i has no function to convert between named time zones, so timestamps can only be
+        evaluated in the time zone they are stored in (the connection's time zone).
+        """
+        if tzname and settings.USE_TZ and tzname != self.connection.timezone_name:
+            raise NotSupportedError(
+                f"Db2 for i cannot convert timestamps to time zone {tzname!r} in SQL. Stored timestamps are in "
+                f"{self.connection.timezone_name!r}; set DATABASES[...]['TIME_ZONE'] (or activate that time zone) "
+                f"so the two match."
+            )
+        return sql, params
+
+    def date_extract_sql(self, lookup_type, sql, params):
+        lookup_type = lookup_type.lower()
+        if lookup_type == 'iso_year':
+            # The ISO year is the year of the Thursday in the same ISO week.
+            return f"YEAR({sql} + (4 - DAYOFWEEK_ISO({sql})) DAYS)", (*params, *params)
+        try:
+            function = EXTRACT_FUNCTIONS[lookup_type]
+        except KeyError:
+            raise ValueError(f"Invalid lookup type: {lookup_type!r}")
+        return f"{function}({sql})", params
+
+    def datetime_extract_sql(self, lookup_type, sql, params, tzname):
+        sql, params = self._convert_sql_to_tz(sql, params, tzname)
+        return self.date_extract_sql(lookup_type, sql, params)
+
+    def _trunc_format(self, lookup_type):
+        try:
+            return TRUNC_FORMATS[lookup_type.lower()]
+        except KeyError:
+            raise ValueError(f"Invalid truncation kind: {lookup_type!r}")
+
+    def date_trunc_sql(self, lookup_type, sql, params, tzname=None):
+        sql, params = self._convert_sql_to_tz(sql, params, tzname)
+        trunc_format = self._trunc_format(lookup_type)
+        return f"DATE(TRUNC_TIMESTAMP(TIMESTAMP({sql}, TIME('00:00:00')), '{trunc_format}'))", params
+
+    def datetime_trunc_sql(self, lookup_type, sql, params, tzname):
+        sql, params = self._convert_sql_to_tz(sql, params, tzname)
+        return f"TRUNC_TIMESTAMP({sql}, '{self._trunc_format(lookup_type)}')", params
+
+    def time_trunc_sql(self, lookup_type, sql, params, tzname=None):
+        sql, params = self._convert_sql_to_tz(sql, params, tzname)
+        trunc_format = self._trunc_format(lookup_type)
+        return f"TIME(TRUNC_TIMESTAMP(TIMESTAMP(CURRENT DATE, {sql}), '{trunc_format}'))", params
+
+    def datetime_cast_date_sql(self, sql, params, tzname):
+        sql, params = self._convert_sql_to_tz(sql, params, tzname)
+        return f"DATE({sql})", params
+
+    def datetime_cast_time_sql(self, sql, params, tzname):
+        sql, params = self._convert_sql_to_tz(sql, params, tzname)
+        return f"TIME({sql})", params
+
+    # Value adaptation
 
     def adapt_timefield_value(self, value):
-        """
-        Transform a time value to an object compatible with what is expected
-        by the backend driver for time columns.
-        """
         if value is None:
             return None
 
@@ -160,10 +251,6 @@ class DatabaseOperations(BaseDatabaseOperations):
         return value
 
     def adapt_datetimefield_value(self, value):
-        """
-        Transform a time value to an object compatible with what is expected
-        by the backend driver for time columns.
-        """
         if value is None:
             return None
 
@@ -178,98 +265,93 @@ class DatabaseOperations(BaseDatabaseOperations):
                 raise ValueError("Db2 for iSeries backend does not support timezone-aware times when USE_TZ is False")
         return value
 
-    # Function to extract time zone-aware day, month or day of week from timestamps   
-    def datetime_extract_sql(self, lookup_type, field_name, tzname):
-        if settings.USE_TZ:
-            raise NotImplemented
+    # Inserts. The insert compiler wraps the INSERT in SELECT ... FROM FINAL TABLE (...) to return
+    # the generated columns, so no RETURNING clause is appended here.
 
-        if lookup_type.upper() == 'WEEK_DAY':
-            return " DAYOFWEEK(%s) " % (field_name)
-        else:
-            return " %s(%s) " % (lookup_type.upper(), field_name)
+    def returning_columns(self, fields):
+        # Django 6.0+
+        return '', ()
 
-    # Truncating the date value on the basic of lookup type.
-    # e.g If input is 2008-12-04 and month then output will be 2008-12-01 00:00:00
-    # Reference: http://www.ibm.com/developerworks/data/library/samples/db2/0205udfs/index.html
-    def date_trunc_sql(self, lookup_type, field_name):
-        sql = "TIMESTAMP(DATE(SUBSTR(CHAR(%s), 1, %d) || '%s'), TIME('00:00:00'))"
-        if lookup_type.upper() == 'DAY':
-            sql = sql % (field_name, 10, '')
-        elif lookup_type.upper() == 'MONTH':
-            sql = sql % (field_name, 7, '-01')
-        elif lookup_type.upper() == 'YEAR':
-            sql = sql % (field_name, 4, '-01-01')
-        return sql
+    def return_insert_columns(self, fields):
+        # Django 5.2
+        return '', ()
 
-    # Truncating the time zone-aware timestamps value on the basic of lookup type
-    def datetime_trunc_sql(self, lookup_type, field_name, tzname):
-        sql = "TIMESTAMP(SUBSTR(CHAR(%s), 1, %d) || '%s')"
-        if settings.USE_TZ:
-            raise NotImplemented
-        if lookup_type.upper() == 'SECOND':
-            sql = sql % (field_name, 19, '.000000')
-        if lookup_type.upper() == 'MINUTE':
-            sql = sql % (field_name, 16, '.00.000000')
-        elif lookup_type.upper() == 'HOUR':
-            sql = sql % (field_name, 13, '.00.00.000000')
-        elif lookup_type.upper() == 'DAY':
-            sql = sql % (field_name, 10, '-00.00.00.000000')
-        elif lookup_type.upper() == 'MONTH':
-            sql = sql % (field_name, 7, '-01-00.00.00.000000')
-        elif lookup_type.upper() == 'YEAR':
-            sql = sql % (field_name, 4, '-01-01-00.00.00.000000')
-        return sql, []
+    def fetch_returned_rows(self, cursor, returning_params):
+        # Django 6.0+
+        return cursor.fetchall()
 
-    def date_interval_sql(self, timedelta):
-        return "%d DAYS + %d SECONDS + %d MICROSECONDS" % (
-            timedelta.days, timedelta.seconds, timedelta.microseconds)
+    def fetch_returned_insert_columns(self, cursor, returning_params):
+        # Django 5.2
+        return cursor.fetchone()
 
-    # As casting is not required, so nothing is required to do in this function.
-    def datetime_cast_sql(self):
-        return "%s"
+    def fetch_returned_insert_rows(self, cursor):
+        # Django 5.2
+        return cursor.fetchall()
 
-    # Function to return SQL from dropping foreign key.
-    def drop_foreignkey_sql(self):
-        return "DROP FOREIGN KEY"
-
-    # Dropping auto generated property of the identity column.
-    def drop_sequence_sql(self, table):
-        return "ALTER TABLE %s ALTER COLUMN ID DROP IDENTITY" % (self.quote_name(table))
-
-    def fulltext_search_sql(self, field_name):
-        sql = "WHERE %s = ?" % field_name
-        return sql
-
-    # Function to return value of auto-generated field of last executed insert query. 
     def last_insert_id(self, cursor, table_name, pk_name):
-        result = cursor.execute('SELECT IDENTITY_VAL_LOCAL() AS IDENTITY FROM SYSIBM.SYSDUMMY1')
-        return result.fetchone()[0]
+        # IDENTITY_VAL_LOCAL() returns DECIMAL(31, 0) and ignores values generated by triggers.
+        cursor.execute('SELECT IDENTITY_VAL_LOCAL() AS IDENTITY FROM SYSIBM.SYSDUMMY1')
+        value = cursor.fetchone()[0]
+        return None if value is None else int(value)
 
-    # In case of WHERE clause, if the search is required to be case insensitive then converting 
+    def has_after_insert_triggers(self, table):
+        """
+        Whether the table has AFTER INSERT triggers (SQL or external). Cached per connection
+        object: a trigger added while the application runs is seen after a restart.
+        """
+        table = table.upper()
+        if table not in self._after_insert_trigger_cache:
+            with self.connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT 1 FROM QSYS2.SYSTRIGGERS WHERE EVENT_OBJECT_SCHEMA = CURRENT_SCHEMA "
+                    "AND EVENT_OBJECT_TABLE = %s AND ACTION_TIMING = 'AFTER' "
+                    "AND (EVENT_MANIPULATION = 'INSERT' OR EVENTINSERT = 'Y') FETCH FIRST 1 ROWS ONLY",
+                    [table],
+                )
+                self._after_insert_trigger_cache[table] = cursor.fetchone() is not None
+        return self._after_insert_trigger_cache[table]
+
+    def bulk_batch_size(self, fields, objs):
+        # Django 6.1 limits batches by max_query_params by default; 5.2 and 6.0 don't.
+        if not fields:
+            return len(objs)
+        batch_size = max(self.connection.features.max_query_params // len(fields), 1)
+        if len(fields) > 1 and fields[0] is fields[1] and getattr(fields[0], 'primary_key', False):
+            # bulk_update() passes [pk, pk, *fields]. Each object becomes a CASE branch, and Db2 for i
+            # rejects a CASE with a few thousand branches (SQL0101); small batches are also faster.
+            batch_size = min(batch_size, BULK_UPDATE_BATCH_SIZE)
+        return batch_size
+
+    def bulk_insert_sql(self, fields, placeholder_rows):
+        placeholder_rows_sql = (", ".join(row) for row in placeholder_rows)
+        values_sql = ", ".join(f'({sql})' for sql in placeholder_rows_sql)
+        return f"VALUES {values_sql}"
+
+    # Querying
+
+    def limit_offset_sql(self, low_mark, high_mark):
+        # Db2 for i rejects a bare "OFFSET n"; it needs the ROWS keyword.
+        limit, offset = self._get_limit_offset_params(low_mark, high_mark)
+        return ' '.join(sql for sql in (
+            ('OFFSET %d ROWS' % offset) if offset else None,
+            ('FETCH FIRST %d ROWS ONLY' % limit) if limit else None,
+        ) if sql)
+
+    # In case of WHERE clause, if the search is required to be case insensitive then converting
     # left hand side field to upper.
     def lookup_cast(self, lookup_type, internal_type=None):
         if lookup_type in ('iexact', 'icontains', 'istartswith', 'iendswith'):
             return "UPPER(%s)"
         return "%s"
 
-    # As DB2 v91 specifications, 
+    # As DB2 v91 specifications,
     # Maximum length of a table name and Maximum length of a column name is 128
     # http://publib.boulder.ibm.com/infocenter/db2e/v9r1/index.jsp?topic=/com.ibm.db2e.doc/db2elimits.html
     def max_name_length(self):
         return 128
 
-    # As DB2 v97 specifications,
-    # Maximum length of a database name is 8
-    # http://publib.boulder.ibm.com/infocenter/db2luw/v9r7/topic/com.ibm.db2.luw.sql.ref.doc/doc/r0001029.html
-    def max_db_name_length(self):
-        return 8
-
     def no_limit_value(self):
         return None
-
-    # Method to point custom query class implementation.
-    def query_class(self, DefaultQueryClass):
-        return query.query_class(DefaultQueryClass)
 
     # Function to quote the name of schema, table and column.
     def quote_name(self, name=None):
@@ -285,150 +367,10 @@ class DatabaseOperations(BaseDatabaseOperations):
 
         return "\"%s\"" % name
 
-    # SQL to return RANDOM number.
-    # Reference: http://publib.boulder.ibm.com/infocenter/db2luw/v8/topic/com.ibm.db2.udb.doc/admin/r0000840.htm
-    def random_function_sql(self):
-        return "SYSFUN.RAND()"
-
     def regex_lookup(self, lookup_type):
         if lookup_type == 'regex':
-            return '''xmlcast( xmlquery('fn:matches(xs:string($c), "%%s")' passing %s as "c") as varchar(5)) = 'true' db2regexExtraField(%s)'''
-        else:
-            return '''xmlcast( xmlquery('fn:matches(xs:string($c), "%%s", "i")' passing %s as "c") as varchar(5)) = 'true' db2regexExtraField(%s)'''
-
-    # As save-point is supported by DB2, following function will return SQL to create savepoint.
-    def savepoint_create_sql(self, sid):
-        return "SAVEPOINT %s ON ROLLBACK RETAIN CURSORS" % sid
-
-    # Function to commit savepoint.   
-    def savepoint_commit_sql(self, sid):
-        return "RELEASE TO SAVEPOINT %s" % sid
-
-    # Function to rollback savepoint.
-    def savepoint_rollback_sql(self, sid):
-        return "ROLLBACK TO SAVEPOINT %s" % sid
-
-    # Deleting all the rows from the list of tables provided and resetting all the
-    # sequences.
-    def sql_flush(self, style, tables, sequences, allow_cascade=False):
-        if tables:
-            truncated_tables = set(t.upper() for t in tables)
-            constraints = set()
-            for table in tables:
-                for foreign_table, constraint, foreign_pk_col, foreign_tgt_col in self._foreign_key_constraints(table):
-                    if allow_cascade:
-                        truncated_tables.add(foreign_table)
-                    constraints.add((foreign_table, constraint, foreign_pk_col, foreign_tgt_col, table))
-
-            sqls = [self._drop_constraint_sql(*constraint) for constraint in constraints]
-            sqls.append('COMMIT')
-
-            sqls.extend(' '.join([style.SQL_KEYWORD("DELETE"),
-                                     style.SQL_KEYWORD("FROM"),
-                                     style.SQL_TABLE("%s" % self.quote_name(table)),
-                                     style.SQL_KEYWORD("WHERE"),
-                                     "1 = 1"]) for table in tables)
-            sqls.append('COMMIT')
-
-            sqls.extend(' '.join([style.SQL_KEYWORD("ALTER TABLE"),
-                                  style.SQL_TABLE("%s" % self.quote_name(sequence['table'])),
-                                  style.SQL_KEYWORD("ALTER COLUMN"),
-                                  self.quote_name(sequence['column']),
-                                  style.SQL_KEYWORD("RESTART WITH 1")])
-                        for sequence in sequences
-                        if sequence['column'] is not None)
-
-            sqls.extend(self._add_constraint_sql(*constraint) for constraint in constraints)
-            return sqls
-        else:
-            return []
-
-    def sequence_reset_sql(self, style, model_list):
-        """
-        Note: Db2 for iSeries cannot reset a table's primary key sequence if you have an open transaction
-        that has already inserted/updated that table.
-        """
-        from django.db import models
-        cursor = self.connection.cursor()
-        sqls = []
-        for model in model_list:
-            table = model._meta.db_table
-            for field in model._meta.local_fields:
-                if isinstance(field, models.AutoField):
-                    max_sql = "SELECT MAX(%s) FROM %s" % (self.quote_name(field.column), self.quote_name(table))
-                    cursor.execute(max_sql)
-                    max_id = [row[0] for row in cursor.fetchall()]
-                    if max_id[0] == None:
-                        max_id[0] = 0
-                    sqls.append(style.SQL_KEYWORD("ALTER TABLE") + " " +
-                                style.SQL_TABLE("%s" % self.quote_name(table)) +
-                                " " + style.SQL_KEYWORD("ALTER COLUMN") + " %s "
-                                % self.quote_name(field.column) +
-                                style.SQL_KEYWORD("RESTART WITH %s" % (max_id[0] + 1)))
-                    break
-
-            for field in model._meta.many_to_many:
-                m2m_table = field.m2m_db_table()
-                if field.remote_field is not None and hasattr(field.remote_field, 'through'):
-                    flag = field.remote_field.through
-                else:
-                    flag = False
-                if not flag:
-                    max_sql = "SELECT MAX(%s) FROM %s" % (self.quote_name('ID'), self.quote_name(table))
-                    cursor.execute(max_sql)
-                    max_id = [row[0] for row in cursor.fetchall()]
-                    if max_id[0] == None:
-                        max_id[0] = 0
-                    sqls.append(style.SQL_KEYWORD("ALTER TABLE") + " " +
-                                style.SQL_TABLE("%s" % self.quote_name(m2m_table)) +
-                                " " + style.SQL_KEYWORD("ALTER COLUMN") + " %s "
-                                % self.quote_name('ID') +
-                                style.SQL_KEYWORD("RESTART WITH %s" % (max_id[0] + 1)))
-        if cursor:
-            cursor.close()
-
-        return sqls
-
-    # Returns sqls to reset the passed sequences
-    def sequence_reset_by_name_sql(self, style, sequences):
-        sqls = []
-        for seq in sequences:
-            sqls.append(style.SQL_KEYWORD("ALTER TABLE") + " " +
-                        style.SQL_TABLE("%s" % self.quote_name(seq.get('table'))) +
-                        " " + style.SQL_KEYWORD("ALTER COLUMN") + " %s " % self.quote_name(seq.get('column')) +
-                        style.SQL_KEYWORD("RESTART WITH %s" % (1)))
-        return sqls
-
-
-    def value_to_db_datetime(self, value):
-        if value is None:
-            return None
-
-        if is_aware(value):
-            if settings.USE_TZ:
-                value = value.astimezone(utc).replace(tzinfo=None)
-            else:
-                raise ValueError("Timezone aware datetime not supported")
-        return str(value)
-
-    def value_to_db_time(self, value):
-        if value is None:
-            return None
-
-        if is_aware(value):
-            raise ValueError("Timezone aware time not supported")
-        else:
-            return value
-
-    def year_lookup_bounds_for_date_field(self, value):
-        lower_bound = datetime.date(int(value), 1, 1)
-        upper_bound = datetime.date(int(value), 12, 31)
-        return [lower_bound, upper_bound]
-
-    def bulk_insert_sql(self, fields, placeholder_rows):
-        placeholder_rows_sql = (", ".join(row) for row in placeholder_rows)
-        values_sql = ", ".join(f'({sql})' for sql in placeholder_rows_sql)
-        return f"VALUES {values_sql}"
+            return 'REGEXP_LIKE(%s, %s)'
+        return "REGEXP_LIKE(%s, %s, 'i')"
 
     def for_update_sql(self, nowait=False, skip_locked=False, of=(), no_key=False):
         """
@@ -442,69 +384,153 @@ class DatabaseOperations(BaseDatabaseOperations):
             ' SKIP LOCKED DATA' if skip_locked else '',
         )
 
+    # Savepoints
 
-    def fetch_returned_insert_id(self, cursor):
-        return cursor.fetchone()[0]
+    def savepoint_create_sql(self, sid):
+        return "SAVEPOINT %s ON ROLLBACK RETAIN CURSORS" % sid
 
-    def fetch_returned_insert_ids(self, cursor):
-        return [id_ for (id_, ) in cursor.fetchall()]
+    def savepoint_commit_sql(self, sid):
+        return "RELEASE TO SAVEPOINT %s" % sid
 
-    def return_insert_id(self):
-        """empty implementation as we implement returned ids with a cursor and custom Insert compiler"""
-        return None, None
+    def savepoint_rollback_sql(self, sid):
+        return "ROLLBACK TO SAVEPOINT %s" % sid
 
-    def __foreign_key_constraints(self, table):
+    # Flush and sequences
+
+    def sql_flush(self, style, tables, *, reset_sequences=False, allow_cascade=False):
+        """
+        Delete all rows from the given tables. Foreign keys that reference them are dropped first
+        and re-created afterwards, because Db2 for i cannot defer constraint checks.
+        """
+        if not tables:
+            return []
+
+        flushed_tables = {table.upper() for table in tables}
+        constraints = set()
+        for table in tables:
+            for constraint in self._foreign_keys_referencing(table):
+                if allow_cascade:
+                    flushed_tables.add(constraint.referencing_table)
+                constraints.add(constraint)
+
+        sqls = [self._drop_constraint_sql(constraint) for constraint in sorted(constraints)]
+        # Changes must be committed before tables touched in this transaction can be altered (SQL0910).
+        sqls.append('COMMIT')
+        sqls.extend(
+            '%s %s %s' % (style.SQL_KEYWORD('DELETE'), style.SQL_KEYWORD('FROM'), style.SQL_TABLE(self.quote_name(table)))
+            for table in sorted(flushed_tables)
+        )
+        sqls.append('COMMIT')
+        if reset_sequences:
+            sequences = [
+                sequence for sequence in self.connection.introspection.sequence_list()
+                if sequence['table'].upper() in flushed_tables
+            ]
+            sqls.extend(self.sequence_reset_by_name_sql(style, sequences))
+        sqls.extend(self._add_constraint_sql(constraint) for constraint in sorted(constraints))
+        return sqls
+
+    def execute_sql_flush(self, sql_list):
+        """
+        sql_flush() commits between dropping foreign keys and re-adding them, so a failure part way
+        would leave them dropped. On failure, re-add every foreign key that is missing, then re-raise.
+        """
+        try:
+            super().execute_sql_flush(sql_list)
+        except Exception:
+            for sql in sql_list:
+                if ' ADD CONSTRAINT ' in sql and ' FOREIGN KEY ' in sql:
+                    try:
+                        with self.connection.cursor() as cursor:
+                            cursor.execute(sql)
+                    except utils.Error:
+                        pass  # still present (it was never dropped) or can't be re-added
+            raise
+
+    def sequence_reset_sql(self, style, model_list):
+        """
+        Note: Db2 for iSeries cannot reset a table's primary key sequence if you have an open transaction
+        that has already inserted/updated that table.
+        """
+        sqls = []
+        with self.connection.cursor() as cursor:
+            for model in model_list:
+                table = model._meta.db_table
+                for field in model._meta.local_fields:
+                    if isinstance(field, AutoFieldMixin):
+                        cursor.execute("SELECT MAX(%s) FROM %s" % (self.quote_name(field.column), self.quote_name(table)))
+                        max_id = cursor.fetchone()[0] or 0
+                        sqls.append(self._restart_identity_sql(style, table, field.column, max_id + 1))
+                        break
+        return sqls
+
+    def sequence_reset_by_name_sql(self, style, sequences):
+        return [
+            self._restart_identity_sql(style, sequence['table'], sequence['column'], 1)
+            for sequence in sequences
+            if sequence['column'] is not None
+        ]
+
+    def _restart_identity_sql(self, style, table, column, restart_with):
+        return '%s %s %s %s %s' % (
+            style.SQL_KEYWORD('ALTER TABLE'),
+            style.SQL_TABLE(self.quote_name(table)),
+            style.SQL_KEYWORD('ALTER COLUMN'),
+            style.SQL_FIELD(self.quote_name(column)),
+            style.SQL_KEYWORD('RESTART WITH %d' % restart_with),
+        )
+
+    def _foreign_keys_referencing(self, table):
+        """Return the enabled foreign keys in the current schema that reference the given table."""
         foreign_keys_sql = """
-        SELECT FK.TABLE_NAME, CST.CONSTRAINT_NAME, FK.COLUMN_NAME, TGT.COLUMN_NAME
-            FROM QSYS2.SYSCST CST
-                JOIN QSYS2.SYSKEYCST FK 
-                  ON CST.CONSTRAINT_SCHEMA = FK.CONSTRAINT_SCHEMA 
-                 AND CST.CONSTRAINT_NAME = FK.CONSTRAINT_NAME
-                JOIN QSYS2.SYSREFCST REF 
-                  ON CST.CONSTRAINT_SCHEMA = REF.CONSTRAINT_SCHEMA 
-                 AND CST.CONSTRAINT_NAME = REF.CONSTRAINT_NAME
-                JOIN QSYS2.SYSKEYCST PK 
-                  ON REF.UNIQUE_CONSTRAINT_SCHEMA = PK.CONSTRAINT_SCHEMA 
-                 AND REF.UNIQUE_CONSTRAINT_NAME = PK.CONSTRAINT_NAME
-                JOIN QSYS2.SYSCOLUMNS TGT
-                  ON PK.TABLE_SCHEMA = TGT.TABLE_SCHEMA
-                 AND PK.TABLE_NAME = TGT.TABLE_NAME
-                 AND TGT.ORDINAL_POSITION = FK.COLUMN_POSITION
-            WHERE CST.CONSTRAINT_TYPE = 'FOREIGN KEY'
-              AND FK.ORDINAL_POSITION = PK.ORDINAL_POSITION
-              AND PK.TABLE_SCHEMA = CURRENT_SCHEMA
-              AND PK.TABLE_NAME = ?
-              AND ENABLED = 'YES'
-          """.strip()
-        cursor = self.connection.cursor()
-        foreign_keys = cursor.execute(foreign_keys_sql, [table.upper()]).fetchall()
-        return foreign_keys
+            SELECT FK.TABLE_NAME, FK.CONSTRAINT_NAME, FKC.COLUMN_NAME, PK.TABLE_NAME, PKC.COLUMN_NAME,
+                   REF.DELETE_RULE, REF.UPDATE_RULE
+              FROM QSYS2.SYSREFCST REF
+              JOIN QSYS2.SYSCST FK
+                ON FK.CONSTRAINT_SCHEMA = REF.CONSTRAINT_SCHEMA AND FK.CONSTRAINT_NAME = REF.CONSTRAINT_NAME
+              JOIN QSYS2.SYSCST PK
+                ON PK.CONSTRAINT_SCHEMA = REF.UNIQUE_CONSTRAINT_SCHEMA
+               AND PK.CONSTRAINT_NAME = REF.UNIQUE_CONSTRAINT_NAME
+              JOIN QSYS2.SYSKEYCST FKC
+                ON FKC.CONSTRAINT_SCHEMA = FK.CONSTRAINT_SCHEMA AND FKC.CONSTRAINT_NAME = FK.CONSTRAINT_NAME
+              JOIN QSYS2.SYSKEYCST PKC
+                ON PKC.CONSTRAINT_SCHEMA = PK.CONSTRAINT_SCHEMA AND PKC.CONSTRAINT_NAME = PK.CONSTRAINT_NAME
+               AND PKC.ORDINAL_POSITION = FKC.ORDINAL_POSITION
+             WHERE PK.TABLE_SCHEMA = CURRENT_SCHEMA
+               AND PK.TABLE_NAME = %s
+               AND FK.ENABLED = 'YES'
+             ORDER BY FK.TABLE_NAME, FK.CONSTRAINT_NAME, FKC.ORDINAL_POSITION
+        """
+        with self.connection.cursor() as cursor:
+            cursor.execute(foreign_keys_sql, [table.upper()])
+            rows = cursor.fetchall()
 
-    @cached_property
-    def _foreign_key_constraints(self):
-        """cached implementation, modelled after django's oracle backend implementation"""
-        return lru_cache(maxsize=512)(self.__foreign_key_constraints)
+        # One row per column: group multi-column foreign keys into a single constraint.
+        grouped = {}
+        for referencing_table, name, referencing_column, referenced_table, referenced_column, delete_rule, update_rule in rows:
+            key = (referencing_table, name)
+            if key not in grouped:
+                grouped[key] = (referenced_table, [], [], delete_rule, update_rule)
+            grouped[key][1].append(referencing_column)
+            grouped[key][2].append(referenced_column)
+        return [
+            ForeignKeyConstraint(referencing_table, name, tuple(referencing_columns), referenced_table,
+                                 tuple(referenced_columns), delete_rule, update_rule)
+            for (referencing_table, name), (referenced_table, referencing_columns, referenced_columns, delete_rule,
+                                            update_rule) in grouped.items()
+        ]
 
-    def _drop_constraint_sql(self, referencing_table, constraint_name, referencing_col, target_col, target_table):
-        t = self.quote_name(referencing_table)
-        c = self.quote_name(constraint_name)
-        drop_constraint_sql = f"ALTER TABLE {t} DROP CONSTRAINT {c}"
-        return drop_constraint_sql
+    def _drop_constraint_sql(self, constraint):
+        return 'ALTER TABLE %s DROP CONSTRAINT %s' % (
+            self.quote_name(constraint.referencing_table), self.quote_name(constraint.name))
 
-    def _add_constraint_sql(self, referencing_table, constraint_name, referencing_col, target_col, target_table):
-        ref_t = self.quote_name(referencing_table)
-        cst = self.quote_name(constraint_name)
-        col = self.quote_name(referencing_col)
-        target_t = self.quote_name(target_table)
-        add_constraint_sql = f"ALTER TABLE {ref_t} ADD CONSTRAINT {cst} " \
-                             f"FOREIGN KEY ({col}) REFERENCES {target_t} ({target_col})"
-        return add_constraint_sql
-
-    def _convert_field_to_tz(self, field_name, tzname):
-        # TODO: this function does not work properly on iseries
-        if settings.USE_TZ:
-            field_name = "CONVERT_TZ(%s, 'UTC', '%s')" % (field_name, tzname)
-        return field_name
-
-    def check_expression_support(self, expression):
-        super().check_expression_support(expression)
+    def _add_constraint_sql(self, constraint):
+        return 'ALTER TABLE %s ADD CONSTRAINT %s FOREIGN KEY (%s) REFERENCES %s (%s) ON DELETE %s ON UPDATE %s' % (
+            self.quote_name(constraint.referencing_table),
+            self.quote_name(constraint.name),
+            ', '.join(self.quote_name(column) for column in constraint.referencing_columns),
+            self.quote_name(constraint.referenced_table),
+            ', '.join(self.quote_name(column) for column in constraint.referenced_columns),
+            constraint.delete_rule,
+            constraint.update_rule,
+        )

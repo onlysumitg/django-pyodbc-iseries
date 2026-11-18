@@ -1,13 +1,16 @@
 """Db2 for iSeries support for Django framework."""
 
-__version__ = "1.0.4"
+__version__ = "2.0.0"
+
+import re
+
+from django.core.exceptions import ImproperlyConfigured
 
 try:
     import pyodbc as Database
-except:
-    Database = None
-else:
-    pyodbc_version = tuple(int(x) for x in Database.version.split('.'))
-    if pyodbc_version < (4, 0, 0):
-        from django.core.exceptions import ImproperlyConfigured
-        raise ImproperlyConfigured(f'PyODBC 4.0 or later required; you have {pyodbc_version}.')
+except ImportError as e:
+    raise ImproperlyConfigured(f'Error loading pyodbc module: {e}') from e
+
+pyodbc_version = tuple(int(part) for part in re.findall(r'\d+', Database.version)[:3])
+if pyodbc_version < (4, 0, 39):
+    raise ImproperlyConfigured(f'pyodbc 4.0.39 or later is required; you have {Database.version}.')

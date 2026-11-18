@@ -1,19 +1,50 @@
 [build-system]
-requires = ["flit_core >=2,<4"]
-build-backend = "flit_core.buildapi"
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
 
-[tool.flit.metadata]
-module = "django_iseries"
-author = "Steven James"
-author-email = "steven@waitforitjames.com"
-requires = ['pyodbc>=4.0.27', 'django>=2.2.0', 'pytz', 'sqlparse']
-requires-python = ">=3.6"
-classifiers=['Development Status :: 4 - Beta',
-    'Intended Audience :: Developers',
-    'License :: OSI Approved :: Apache Software License',
-    'Operating System :: Microsoft :: Windows :: Windows NT/2000',
-    'Operating System :: Unix',
-    'Operating System :: POSIX :: Linux',
-    'Operating System :: MacOS',
-    'Topic :: Database :: Front-Ends'
+[project]
+name = "django-pyodbc-iseries"
+dynamic = ["version"]
+description = "Django database backend for IBM Db2 for i (IBM i, iSeries, AS/400) using pyodbc"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Sumit", email = "onlysumitg@gmail.com" }]
+requires-python = ">=3.10"
+dependencies = [
+    "Django>=5.2,<6.2",
+    "pyodbc>=4.0.39",
 ]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Framework :: Django",
+    "Framework :: Django :: 5.2",
+    "Framework :: Django :: 6.0",
+    "Framework :: Django :: 6.1",
+    "Topic :: Database :: Front-Ends",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "pytest-django",
+    "pytest-dotenv",
+    "pytest-timeout",
+]
+
+[project.urls]
+Source = "https://github.com/onlysumitg/django-pyodbc-iseries"
+
+[tool.setuptools.dynamic]
+version = { attr = "django_iseries.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["django_iseries*"]
